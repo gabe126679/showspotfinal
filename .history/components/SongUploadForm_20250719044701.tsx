@@ -1,0 +1,687 @@
+import React, { useState } from "react";
+import {
+  StyleSheet,
+  View,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  Image,
+  Alert,
+  ScrollView,
+  Modal,
+  ActivityIndicator,
+  Platform,
+} from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
+import { LinearGradient } from "expo-linear-gradient";
+import * as DocumentPicker from "expo-document-picker";
+import * as ImagePicker from "expo-image-picker";
+import { supabase } from "../lib/supabase";
+
+interface SongUploadFormProps {
+  visible: boolean;
+  onClose: () => void;
+  artistData: any;
+}
+
+const PRICE_SUGGESTIONS = [
+  { label: "Free", value: "0" },
+  { label: "$1", value: "1" },
+  { label: "$5", value: "5" },
+  { label: "$10", value: "10" },
+];
+
+const SongUploadForm: React.FC<SongUploadFormProps> = ({
+  visible,
+  onClose,
+  artistData,
+}) => {
+  const [songTitle, setSongTitle] = useState("");
+  const [songPrice, setSongPrice] = useState("");
+  const [songFile, setSongFile] = useState<any>(null);
+  const [songImage, setSongImage] = useState<any>(null);
+  const [loading, setLoading] = useState(false);
+  const [showPriceSuggestions, setShowPriceSuggestions] = useState(false);
+
+  const handleSongFileUpload = async () => {
+    try {
+      console.log('Starting file picker...');
+      
+      const result = await DocumentPicker.getDocumentAsync({
+        type: [
+          'audio/mpeg',      // MP3
+          'audio/mp3',       // MP3 alternative
+          'audio/wav',       // WAV
+          'audio/x-wav',     // WAV alternative
+          'audio/mp4',       // M4A
+          'audio/aac',       // AAC
+          'audio/*'          // Fallback
+        ],
+        copyToCacheDirectory: true,
+        multiple: false,
+      });
+
+      console.log('DocumentPicker result:', result);
+
+      if (!result.canceled && result.assets && result.assets.length > 0) {
+        const file = result.assets[0];
+        
+        console.log('Selected file details:', {
+          name: file.name,
+          size: file.size,
+          mimeType: file.mimeType,
+          uri: file.uri
+        });
+        
+        // Validate file size (max 50MB)
+        const maxSize = 50 * 1024 * 1024; // 50MB
+        if (file.size && file.size > maxSize) {
+          Alert.alert("File Too Large", "Please select an audio file smaller than 50MB");
+          return;
+        }
+        
+        // Validate MIME type
+        const validMimeTypes = [
+          'audio/mpeg',
+          'audio/mp3', 
+          'audio/wav',
+          'audio/x-wav',
+          'audio/mp4',
+          'audio/aac',
+          'audio/m4a'
+        ];
+        
+        const isValidMimeType = file.mimeType && validMimeTypes.some(type => 
+          file.mimeType.toLowerCase().includes(type.split('/')[1])
+        );
+        
+        // Validate file extension as backup
+        const validExtensions = ['mp3', 'wav', 'm4a', 'aac'];
+        const fileExtension = file.name.split('.').pop()?.toLowerCase();
+        const hasValidExtension = fileExtension && validExtensions.includes(fileExtension);
+        
+        if (!isValidMimeType && !hasValidExtension) {
+          Alert.alert(
+            "Invalid File Type", 
+            "Please select a valid audio file (MP3, WAV, M4A, or AAC)"
+          );
+          return;
+        }
+        
+        // Additional validation: check if file actually exists and is readable
+        try {
+          const testResponse = await fetch(file.uri, { method: 'HEAD' });
+          if (!testResponse.ok) {
+            throw new Error('File not accessible');
+          }
+          console.log('File accessibility verified');
+        } catch (accessError) {
+          console.error('File access test failed:', accessError);
+          Alert.alert("File Error", "The selected file cannot be accessed. Please try selecting a different file.");
+          return;
+        }
+        
+        setSongFile(file);
+        console.log('File successfully selected and validated');
+        
+      } else {
+        console.log('File selection cancelled or failed');
+      }
+    } catch (error) {
+      console.error("Error picking audio file:", error);
+      Alert.alert("Error", `Failed to select audio file: ${error.message}`);
+    }
+  };
+
+  const handleImageUpload = async () => {
+    try {
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== "granted") {
+        Alert.alert("Permission needed", "Please grant photo library access");
+        return;
+      }
+
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.8,
+      });
+
+      if (!result.canceled && result.assets && result.assets.length > 0) {
+        setSongImage(result.assets[0]);
+      }
+    } catch (error) {
+      console.error("Error picking image:", error);
+      Alert.alert("Error", "Failed to select image");
+    }
+  };
+
+  const handlePriceSelect = (price: string) => {
+    setSongPrice(price);
+    setShowPriceSuggestions(false);
+  };
+
+  const validateForm = () => {
+    if (!songTitle.trim()) {
+      Alert.alert("Error", "Please enter a song title");
+      return false;
+    }
+    
+    if (!songPrice.trim()) {
+      Alert.alert("Error", "Please enter a song price");
+      return false;
+    }
+    
+    if (!songFile) {
+      Alert.alert("Error", "Please select a song file");
+      return false;
+    }
+    
+    const priceNum = parseFloat(songPrice);
+    if (isNaN(priceNum) || priceNum < 0) {
+      Alert.alert("Error", "Please enter a valid price");
+      return false;
+    }
+    
+    return true;
+  };
+
+  const uploadFileToSupabase = async (file: any, bucket: string, folderPath: string) => {
+    try {
+      console.log('=== FILE UPLOAD DEBUG ===');
+      console.log('Original file:', {
+        name: file.name,
+        size: file.size,
+        type: file.mimeType,
+        uri: file.uri
+      });
+
+      const fileExt = file.name.split('.').pop()?.toLowerCase();
+      console.log('File extension:', fileExt);
+      
+      // Validate audio file
+      const validExtensions = ['mp3', 'wav', 'm4a', 'aac'];
+      if (!validExtensions.includes(fileExt)) {
+        throw new Error(`Invalid file type: ${fileExt}. Please use MP3, WAV, M4A, or AAC.`);
+      }
+      
+      const fileName = `${Date.now()}.${fileExt}`;
+      const filePath = `${folderPath}/${fileName}`;
+      
+      console.log('Upload path:', filePath);
+
+      // Method 1: Try direct file URI upload (works better for audio files)
+      try {
+        console.log('Attempting direct URI upload...');
+        
+        const { data, error } = await supabase.storage
+          .from(bucket)
+          .upload(filePath, {
+            uri: file.uri,
+            type: file.mimeType,
+            name: file.name,
+          }, {
+            cacheControl: '3600',
+            upsert: false,
+          });
+
+        if (error) throw error;
+        
+        console.log('Direct upload successful:', data.path);
+        return data.path;
+        
+      } catch (directError) {
+        console.log('Direct upload failed, trying blob method...', directError);
+        
+        // Method 2: Fallback to blob upload
+        const response = await fetch(file.uri);
+        if (!response.ok) {
+          throw new Error(`Failed to read file: ${response.status}`);
+        }
+        
+        const arrayBuffer = await response.arrayBuffer();
+        console.log('ArrayBuffer size:', arrayBuffer.byteLength);
+        
+        // Verify the file header to ensure it's valid audio
+        const uint8Array = new Uint8Array(arrayBuffer);
+        const header = Array.from(uint8Array.slice(0, 4))
+          .map(b => b.toString(16).padStart(2, '0'))
+          .join('');
+        
+        console.log('File header:', header);
+        
+        // Check for common audio file signatures
+        const validHeaders = {
+          'fff3': 'MP3', // MP3 with ID3v2
+          'fff2': 'MP3', // MP3 with ID3v2
+          'fffb': 'MP3', // MP3
+          '4944': 'MP3', // ID3 tag
+          '5249': 'WAV', // RIFF
+          '6674': 'M4A', // ftyp
+        };
+        
+        const isValidAudio = Object.keys(validHeaders).some(h => header.startsWith(h));
+        if (!isValidAudio) {
+          console.warn('Warning: File may not be valid audio. Header:', header);
+        }
+        
+        // Upload as blob with proper content type
+        const blob = new Blob([arrayBuffer], { 
+          type: file.mimeType || `audio/${fileExt}` 
+        });
+        
+        const { data, error } = await supabase.storage
+          .from(bucket)
+          .upload(filePath, blob, {
+            contentType: file.mimeType || `audio/${fileExt}`,
+            cacheControl: '3600',
+            upsert: false,
+          });
+
+        if (error) throw error;
+        
+        console.log('Blob upload successful:', data.path);
+        return data.path;
+      }
+      
+    } catch (error) {
+      console.error("File upload failed:", error);
+      throw new Error(`Upload failed: ${error.message}`);
+    }
+  };
+
+  const handleSubmit = async () => {
+    if (!validateForm()) return;
+
+    setLoading(true);
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const userId = sessionData.session?.user?.id;
+
+      if (!userId) {
+        Alert.alert("Error", "You must be logged in to upload songs");
+        return;
+      }
+
+      // Upload song file to songs bucket with spotter_id folder structure
+      const songFilePath = await uploadFileToSupabase(
+        songFile,
+        "songs",
+        userId // Use spotter_id as folder name
+      );
+
+      // Upload song image or use artist profile image
+      let songImagePath = artistData?.artistProfileImage || null;
+      if (songImage) {
+        songImagePath = await uploadFileToSupabase(
+          songImage,
+          "song-images",
+          userId // Use spotter_id as folder name
+        );
+      }
+
+      // Save song data to database with snake_case column names
+      const { error: dbError } = await supabase
+        .from("songs")
+        .insert({
+          spotter_id: userId,                    // Required: uploader's spotter_id
+          artist_id: artistData.artistID,        // Required: artist_id from artists table
+          song_type: 'artist',                   // Default to 'artist' type
+          song_title: songTitle.trim(),          // Required: song title
+          song_price: songPrice,                 // Required: price as string
+          song_image: songImagePath,             // Optional: song cover image
+          song_file: songFilePath,               // Required: actual song file path
+          song_status: 'active',                 // Default to 'active'
+          song_consensus: true,                  // Default to true for artist songs
+          // created_at is auto-generated
+        });
+
+      if (dbError) {
+        console.error("Database error:", dbError);
+        throw dbError;
+      }
+
+      Alert.alert(
+        "Success",
+        "Song uploaded successfully!",
+        [
+          {
+            text: "OK",
+            onPress: () => {
+              resetForm();
+              onClose();
+            },
+          },
+        ]
+      );
+    } catch (error) {
+      console.error("Error uploading song:", error);
+      Alert.alert("Error", `Failed to upload song: ${error.message || 'Please try again.'}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const resetForm = () => {
+    setSongTitle("");
+    setSongPrice("");
+    setSongFile(null);
+    setSongImage(null);
+    setShowPriceSuggestions(false);
+  };
+
+  const handleClose = () => {
+    resetForm();
+    onClose();
+  };
+
+  return (
+    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet">
+      <SafeAreaView style={styles.container}>
+        <LinearGradient
+          colors={["#ff00ff", "#2a2882"]}
+          style={styles.header}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 0 }}
+        >
+          <TouchableOpacity onPress={handleClose} style={styles.closeButton}>
+            <Text style={styles.closeButtonText}>✕</Text>
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>Upload Song</Text>
+          <View style={styles.closeButton} />
+        </LinearGradient>
+
+        <ScrollView style={styles.formContainer} showsVerticalScrollIndicator={false}>
+          {/* Song Title */}
+          <View style={styles.inputGroup}>
+            <Text style={styles.label}>Song Title *</Text>
+            <TextInput
+              style={styles.textInput}
+              value={songTitle}
+              onChangeText={setSongTitle}
+              placeholder="Enter song title"
+              placeholderTextColor="#999"
+            />
+          </View>
+
+          {/* Song Price */}
+          <View style={styles.inputGroup}>
+            <Text style={styles.label}>Song Price *</Text>
+            <View style={styles.priceContainer}>
+              <TextInput
+                style={[styles.textInput, styles.priceInput]}
+                value={songPrice}
+                onChangeText={setSongPrice}
+                placeholder="0"
+                placeholderTextColor="#999"
+                keyboardType="numeric"
+              />
+              <TouchableOpacity
+                style={styles.suggestionsButton}
+                onPress={() => setShowPriceSuggestions(!showPriceSuggestions)}
+              >
+                <Text style={styles.suggestionsButtonText}>
+                  {showPriceSuggestions ? "Hide" : "Suggestions"}
+                </Text>
+              </TouchableOpacity>
+            </View>
+            
+            {showPriceSuggestions && (
+              <View style={styles.priceGrid}>
+                {PRICE_SUGGESTIONS.map((price, index) => (
+                  <TouchableOpacity
+                    key={index}
+                    style={styles.priceChip}
+                    onPress={() => handlePriceSelect(price.value)}
+                  >
+                    <Text style={styles.priceChipText}>{price.label}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
+          </View>
+
+          {/* Song File */}
+          <View style={styles.inputGroup}>
+            <Text style={styles.label}>Song File (MP3) *</Text>
+            <TouchableOpacity style={styles.fileButton} onPress={handleSongFileUpload}>
+              <LinearGradient
+                colors={songFile ? ["#50C878", "#32CD32"] : ["#ff00ff", "#2a2882"]}
+                style={styles.fileButtonGradient}
+              >
+                <Text style={styles.fileButtonText}>
+                  {songFile ? `✓ ${songFile.name}` : "Select Audio File"}
+                </Text>
+              </LinearGradient>
+            </TouchableOpacity>
+          </View>
+
+          {/* Song Image */}
+          <View style={styles.inputGroup}>
+            <Text style={styles.label}>Song Image (Optional)</Text>
+            <Text style={styles.subLabel}>
+              Leave empty to use your profile picture
+            </Text>
+            
+            <TouchableOpacity style={styles.imageButton} onPress={handleImageUpload}>
+              {songImage ? (
+                <Image source={{ uri: songImage.uri }} style={styles.imagePreview} />
+              ) : artistData?.artistProfileImage ? (
+                <View style={styles.imagePreviewContainer}>
+                  <Image 
+                    source={{ uri: artistData.artistProfileImage }} 
+                    style={[styles.imagePreview, styles.fallbackImage]} 
+                  />
+                  <Text style={styles.fallbackText}>Default (Your Profile)</Text>
+                </View>
+              ) : (
+                <View style={styles.imagePlaceholder}>
+                  <Text style={styles.imagePlaceholderText}>Tap to select image</Text>
+                </View>
+              )}
+            </TouchableOpacity>
+          </View>
+
+          {/* Submit Button */}
+          <TouchableOpacity
+            style={[styles.submitButton, loading && styles.submitButtonDisabled]}
+            onPress={handleSubmit}
+            disabled={loading}
+          >
+            <LinearGradient
+              colors={loading ? ["#999", "#666"] : ["#ff00ff", "#2a2882"]}
+              style={styles.submitButtonGradient}
+            >
+              {loading ? (
+                <ActivityIndicator color="#fff" />
+              ) : (
+                <Text style={styles.submitButtonText}>Upload Song</Text>
+              )}
+            </LinearGradient>
+          </TouchableOpacity>
+        </ScrollView>
+      </SafeAreaView>
+    </Modal>
+  );
+};
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: "#fff",
+  },
+  header: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 20,
+    paddingVertical: 15,
+  },
+  closeButton: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: "rgba(255,255,255,0.2)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  closeButtonText: {
+    color: "#fff",
+    fontSize: 18,
+    fontWeight: "bold",
+  },
+  headerTitle: {
+    fontSize: 20,
+    fontFamily: "Audiowide-Regular",
+    color: "#fff",
+    textAlign: "center",
+  },
+  formContainer: {
+    flex: 1,
+    padding: 20,
+  },
+  inputGroup: {
+    marginBottom: 25,
+  },
+  label: {
+    fontSize: 16,
+    fontFamily: "Amiko-Regular",
+    color: "#333",
+    marginBottom: 8,
+    fontWeight: "600",
+  },
+  subLabel: {
+    fontSize: 14,
+    fontFamily: "Amiko-Regular",
+    color: "#666",
+    marginBottom: 10,
+    fontStyle: "italic",
+  },
+  textInput: {
+    borderWidth: 1,
+    borderColor: "#ddd",
+    borderRadius: 8,
+    paddingHorizontal: 15,
+    paddingVertical: 12,
+    fontSize: 16,
+    fontFamily: "Amiko-Regular",
+    backgroundColor: "#f9f9f9",
+  },
+  priceContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  priceInput: {
+    flex: 1,
+  },
+  suggestionsButton: {
+    backgroundColor: "#ff00ff",
+    paddingHorizontal: 15,
+    paddingVertical: 12,
+    borderRadius: 8,
+  },
+  suggestionsButtonText: {
+    color: "#fff",
+    fontSize: 14,
+    fontFamily: "Amiko-Regular",
+    fontWeight: "600",
+  },
+  priceGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 10,
+    marginTop: 10,
+  },
+  priceChip: {
+    backgroundColor: "#f0f0f0",
+    paddingHorizontal: 15,
+    paddingVertical: 8,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: "#ddd",
+  },
+  priceChipText: {
+    fontSize: 14,
+    fontFamily: "Amiko-Regular",
+    color: "#333",
+  },
+  fileButton: {
+    borderRadius: 8,
+    overflow: "hidden",
+  },
+  fileButtonGradient: {
+    paddingVertical: 15,
+    paddingHorizontal: 20,
+    alignItems: "center",
+  },
+  fileButtonText: {
+    color: "#fff",
+    fontSize: 16,
+    fontFamily: "Amiko-Regular",
+    fontWeight: "600",
+  },
+  imageButton: {
+    borderRadius: 8,
+    overflow: "hidden",
+    borderWidth: 1,
+    borderColor: "#ddd",
+    backgroundColor: "#f9f9f9",
+  },
+  imagePreview: {
+    width: "100%",
+    height: 200,
+    resizeMode: "cover",
+  },
+  imagePreviewContainer: {
+    position: "relative",
+  },
+  fallbackImage: {
+    opacity: 0.7,
+  },
+  fallbackText: {
+    position: "absolute",
+    bottom: 10,
+    left: 15,
+    backgroundColor: "rgba(0,0,0,0.7)",
+    color: "#fff",
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 4,
+    fontSize: 12,
+    fontFamily: "Amiko-Regular",
+  },
+  imagePlaceholder: {
+    height: 200,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  imagePlaceholderText: {
+    fontSize: 16,
+    fontFamily: "Amiko-Regular",
+    color: "#666",
+  },
+  submitButton: {
+    borderRadius: 12,
+    overflow: "hidden",
+    marginTop: 20,
+    marginBottom: 30,
+  },
+  submitButtonDisabled: {
+    opacity: 0.7,
+  },
+  submitButtonGradient: {
+    paddingVertical: 18,
+    paddingHorizontal: 20,
+    alignItems: "center",
+  },
+  submitButtonText: {
+    color: "#fff",
+    fontSize: 18,
+    fontFamily: "Amiko-Regular",
+    fontWeight: "600",
+  },
+});
+
+export default SongUploadForm;

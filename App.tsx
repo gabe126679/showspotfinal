@@ -2,6 +2,7 @@
 import React from "react";
 import { NavigationContainer } from "@react-navigation/native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import WelcomeScreen from "./screens/WelcomeScreen";
 import LogIn from "./app/login";
 import Signup from "./app/signup";
@@ -34,28 +35,30 @@ const Stack = createNativeStackNavigator<RootStackParamList>();
 
 export default function App() {
   return (
-    <UserProvider>
-      <MusicPlayerProvider>
-        <NavigationContainer>
-          <Stack.Navigator
-            id={undefined}
-            initialRouteName="Welcome"
-            screenOptions={{ headerShown: false }}
-          >
-            <Stack.Screen name="Welcome" component={WelcomeScreen} />
-            <Stack.Screen name="Login" component={LogIn} />
-            <Stack.Screen name="Signup" component={Signup} />
-            <Stack.Screen name="Success" component={Success} />
-            <Stack.Screen name="Failure" component={Failure} />
-            <Stack.Screen name="Picture" component={Picture} />
-            <Stack.Screen name="ArtistSignup" component={ArtistSignup} />
-            <Stack.Screen name="ArtistPicture" component={ArtistPicture} />
-            <Stack.Screen name="VenueSignup" component={VenueSignup} />
-            <Stack.Screen name="VenuePicture" component={VenuePicture} />
-            <Stack.Screen name="BottomTabs" component={BottomTabs} />
-          </Stack.Navigator>
-        </NavigationContainer>
-      </MusicPlayerProvider>
-    </UserProvider>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <UserProvider>
+        <MusicPlayerProvider>
+          <NavigationContainer>
+            <Stack.Navigator
+              id={undefined}
+              initialRouteName="Welcome"
+              screenOptions={{ headerShown: false }}
+            >
+              <Stack.Screen name="Welcome" component={WelcomeScreen} />
+              <Stack.Screen name="Login" component={LogIn} />
+              <Stack.Screen name="Signup" component={Signup} />
+              <Stack.Screen name="Success" component={Success} />
+              <Stack.Screen name="Failure" component={Failure} />
+              <Stack.Screen name="Picture" component={Picture} />
+              <Stack.Screen name="ArtistSignup" component={ArtistSignup} />
+              <Stack.Screen name="ArtistPicture" component={ArtistPicture} />
+              <Stack.Screen name="VenueSignup" component={VenueSignup} />
+              <Stack.Screen name="VenuePicture" component={VenuePicture} />
+              <Stack.Screen name="BottomTabs" component={BottomTabs} />
+            </Stack.Navigator>
+          </NavigationContainer>
+        </MusicPlayerProvider>
+      </UserProvider>
+    </GestureHandlerRootView>
   );
 }

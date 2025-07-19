@@ -14,7 +14,6 @@ import {
   Platform,
   Vibration,
 } from "react-native";
-import { PanGestureHandler, State } from 'react-native-gesture-handler';
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useNavigation } from "@react-navigation/native";
 import { useRouter } from "expo-router";
@@ -25,15 +24,11 @@ import { useMusicPlayer } from "./player";
 
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get("window");
-// iPhone 16 specific dimensions for gesture positioning
-const IPHONE_16_HEIGHT = 852; // iPhone 16 screen height
-const ACTUAL_TAB_BAR_HEIGHT = 85; // Bottom tab bar height
-const GESTURE_AREA_HEIGHT = 95; // Our gesture area height
 const HEADER_HEIGHT = 85;
 const FOOTER_HEIGHT = 85;
 const HANDLE_HEIGHT = 30;
 const TAB_HEIGHT = 80;
-const COLLAPSED_HEIGHT = 150; // Reduced to eliminate gap
+const COLLAPSED_HEIGHT = 215;
 const COLLAPSED_TRANSLATE_Y = SCREEN_HEIGHT - COLLAPSED_HEIGHT - FOOTER_HEIGHT;
 const IMAGE_SECTION_HEIGHT = SCREEN_HEIGHT - HEADER_HEIGHT - FOOTER_HEIGHT;
 
@@ -89,12 +84,7 @@ const VENUE_TABS: TabData[] = [
   { id: "info", title: "venue info", expanded: false },
 ];
 
-interface ProfileProps {
-  onExpandPanelRef?: (expandFn: () => void) => void;
-  onProfileDataChange?: (data: { name: string; type: 'spotter' | 'artist' | 'venue' }) => void;
-}
-
-const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange }) => {
+const Profile = () => {
   const navigation = useNavigation();
   const router = useRouter();
   const { playSong } = useMusicPlayer();
@@ -136,7 +126,6 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
   const handleOpacity = useRef(new Animated.Value(1)).current;
   const nameOpacity = useRef(new Animated.Value(1)).current;
   const fadeAnim = useRef(new Animated.Value(0)).current;
-
 
   // Fetch songs for current profile
   const fetchSongs = async () => {
@@ -311,9 +300,8 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
       Animated.spring(panelTranslateY, {
         toValue: 0,
         useNativeDriver: true,
-        tension: 120,
-        friction: 7,
-        overshootClamping: false,
+        tension: 100,
+        friction: 8,
       }),
       Animated.timing(handleOpacity, {
         toValue: 0.6,
@@ -327,32 +315,6 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
       }),
     ]).start();
   }, [panelTranslateY, handleOpacity, nameOpacity]);
-
-  // Register expandPanel function with parent
-  useEffect(() => {
-    if (onExpandPanelRef) {
-      onExpandPanelRef(expandPanel);
-    }
-  }, [expandPanel, onExpandPanelRef]);
-
-  // Notify parent of current profile data changes
-  useEffect(() => {
-    if (onProfileDataChange) {
-      let name = 'User';
-      if (activeProfile === 'spotter') {
-        name = spotterName || 'User';
-      } else if (activeProfile === 'artist') {
-        name = artistData?.artistName || 'Artist';
-      } else if (activeProfile === 'venue') {
-        name = venueData?.venueName || 'Venue';
-      }
-      
-      onProfileDataChange({
-        name,
-        type: activeProfile
-      });
-    }
-  }, [activeProfile, spotterName, artistData?.artistName, venueData?.venueName, onProfileDataChange]);
 
   const collapsePanel = useCallback(() => {
     setExpanded(false);
@@ -372,9 +334,8 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
       Animated.spring(panelTranslateY, {
         toValue: COLLAPSED_TRANSLATE_Y,
         useNativeDriver: true,
-        tension: 110,
+        tension: 100,
         friction: 8,
-        overshootClamping: false,
       }),
       Animated.timing(handleOpacity, {
         toValue: 1,
@@ -388,18 +349,6 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
       }),
     ]).start();
   }, [panelTranslateY, handleOpacity, nameOpacity]);
-
-  // Gesture handler for panel header swipe down
-  const handlePanelGesture = useCallback((event: any) => {
-    if (event.nativeEvent.state === State.END) {
-      const { translationY, velocityY } = event.nativeEvent;
-      
-      // Only allow swipe down when panel is expanded
-      if (expanded && (translationY > 50 || velocityY > 300)) {
-        collapsePanel();
-      }
-    }
-  }, [expanded, collapsePanel]);
 
   const toggleTab = useCallback((tabId: string) => {
     if (Platform.OS === 'ios') {
@@ -553,67 +502,58 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="light-content" backgroundColor="#2a2882" />
       
-      {/* Header with profile type navigation - Modern Card Style */}
-      <View style={styles.modernHeader}>
-        <LinearGradient
-          colors={["rgba(255, 255, 255, 0.95)", "rgba(248, 248, 248, 0.95)"]}
-          style={styles.headerCard}
+      {/* Header with profile type navigation */}
+      <View style={styles.header}>
+        <TouchableOpacity 
+          style={[
+            styles.headerButton,
+            activeProfile === 'artist' && isArtist && styles.activeHeaderButton
+          ]}
+          onPress={() => handleProfileSwitch('artist')}
         >
-          <View style={styles.headerButtons}>
-            <TouchableOpacity 
-              style={[
-                styles.modernHeaderButton,
-                activeProfile === 'artist' && isArtist && styles.activeModernButton
-              ]}
-              onPress={() => handleProfileSwitch('artist')}
-            >
-              <Text style={styles.buttonIcon}>🎵</Text>
-              <Text style={[
-                styles.modernHeaderButtonText,
-                activeProfile === 'artist' && isArtist && styles.activeModernButtonText
-              ]}>
-                Artist
-              </Text>
-            </TouchableOpacity>
-            
-            <TouchableOpacity 
-              style={[
-                styles.modernHeaderButton,
-                activeProfile === 'spotter' && styles.activeModernButton
-              ]}
-              onPress={() => handleProfileSwitch('spotter')}
-            >
-              <Text style={styles.buttonIcon}>👤</Text>
-              <Text style={[
-                styles.modernHeaderButtonText,
-                activeProfile === 'spotter' && styles.activeModernButtonText
-              ]}>
-                Spotter
-              </Text>
-            </TouchableOpacity>
-            
-            <TouchableOpacity 
-              style={[
-                styles.modernHeaderButton,
-                activeProfile === 'venue' && isVenue && styles.activeModernButton
-              ]}
-              onPress={() => handleProfileSwitch('venue')}
-            >
-              <Text style={styles.buttonIcon}>🏢</Text>
-              <Text style={[
-                styles.modernHeaderButtonText,
-                activeProfile === 'venue' && isVenue && styles.activeModernButtonText
-              ]}>
-                Venue
-              </Text>
-            </TouchableOpacity>
-          </View>
-        </LinearGradient>
+          <Text style={[
+            styles.headerButtonText,
+            activeProfile === 'artist' && isArtist && styles.activeHeaderButtonText
+          ]}>
+            Artist
+          </Text>
+        </TouchableOpacity>
+        
+        <TouchableOpacity 
+          style={[
+            styles.headerButton,
+            activeProfile === 'spotter' && styles.activeHeaderButton
+          ]}
+          onPress={() => handleProfileSwitch('spotter')}
+        >
+          <Text style={[
+            styles.headerButtonText,
+            activeProfile === 'spotter' && styles.activeHeaderButtonText
+          ]}>
+            Spotter
+          </Text>
+        </TouchableOpacity>
+        
+        <TouchableOpacity 
+          style={[
+            styles.headerButton,
+            activeProfile === 'venue' && isVenue && styles.activeVenueHeaderButton
+          ]}
+          onPress={() => handleProfileSwitch('venue')}
+        >
+          <Text style={[
+            styles.headerButtonText,
+            activeProfile === 'venue' && isVenue && styles.activeHeaderButtonText
+          ]}>
+            Venue
+          </Text>
+        </TouchableOpacity>
       </View>
 
       {/* Profile image section */}
       <Animated.View 
         style={[styles.imageSection, { opacity: fadeAnim }]} 
+        {...panResponder.panHandlers}
       >
         {currentData.images.length > 0 ? (
           activeProfile === 'artist' && currentData.images.length > 1 ? (
@@ -647,35 +587,16 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
           </LinearGradient>
         )}
         
-        {/* Floating Stats Card */}
+        {/* Name overlay */}
         <Animated.View 
-          style={[styles.floatingStatsCard, { opacity: nameOpacity }]} 
+          style={[styles.nameOverlay, { opacity: nameOpacity }]} 
           pointerEvents="none"
         >
           <LinearGradient
-            colors={activeProfile === 'venue' 
-              ? ["rgba(80, 200, 120, 0.9)", "rgba(255, 215, 0, 0.9)"] 
-              : ["rgba(42, 40, 130, 0.9)", "rgba(255, 0, 255, 0.9)"]
-            }
-            style={styles.statsGradient}
+            colors={["transparent", "rgba(0,0,0,0.6)"]}
+            style={styles.nameGradient}
           >
-            <View style={styles.statsRow}>
-              <View style={styles.statItem}>
-                <Text style={styles.statNumber}>{currentData.tabs.length}</Text>
-                <Text style={styles.statLabel}>Categories</Text>
-              </View>
-              <View style={styles.statDivider} />
-              <View style={styles.statItem}>
-                <Text style={styles.statNumber}>
-                  {activeProfile === 'artist' ? (songs.length || 0) : 
-                   activeProfile === 'venue' ? '5+' : '12'}
-                </Text>
-                <Text style={styles.statLabel}>
-                  {activeProfile === 'artist' ? 'Songs' : 
-                   activeProfile === 'venue' ? 'Events' : 'Playlists'}
-                </Text>
-              </View>
-            </View>
+            <Text style={styles.nameText}>{currentData.name}</Text>
           </LinearGradient>
         </Animated.View>
       </Animated.View>
@@ -689,23 +610,25 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
           },
         ]}
       >
-        {/* Name header inside panel with swipe down gesture */}
-        <PanGestureHandler onHandlerStateChange={handlePanelGesture}>
-          <LinearGradient
-            colors={activeProfile === 'venue' ? ["#50C878", "#FFD700"] : ["#2a2882", "#ff00ff"]}
-            style={styles.panelHeader}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 0 }}
-          >
-            <Text style={styles.nameTextInside} numberOfLines={1}>
-              {currentData.name}
-            </Text>
-            {/* Add subtle visual indicator for swipe down */}
-            {expanded && (
-              <Text style={styles.swipeDownIndicator}>▼</Text>
-            )}
-          </LinearGradient>
-        </PanGestureHandler>
+        {/* Drag handle */}
+        <Animated.View 
+          style={[styles.gestureHandle, { opacity: handleOpacity }]} 
+          {...panResponder.panHandlers}
+        >
+          <View style={styles.handleBar} />
+        </Animated.View>
+
+        {/* Name header inside panel */}
+        <LinearGradient
+          colors={activeProfile === 'venue' ? ["#50C878", "#FFD700"] : ["#2a2882", "#ff00ff"]}
+          style={styles.panelHeader}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 0 }}
+        >
+          <Text style={styles.nameTextInside} numberOfLines={1}>
+            {currentData.name}
+          </Text>
+        </LinearGradient>
 
         {/* Scrollable tabs */}
         <ScrollView
@@ -891,6 +814,10 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
         </ScrollView>
       </Animated.View>
 
+      {/* Brand colored bar with up arrow indicator */}
+      <View style={[styles.brandBar, activeProfile === 'venue' && styles.venueBrandBar]}>
+        <Text style={styles.upArrow}>▲</Text>
+      </View>
 
       {/* Song Upload Form Modal */}
       <SongUploadForm
@@ -912,7 +839,6 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: "#fff",
     justifyContent: "flex-start",
-    paddingBottom: 85, // Just account for bottom tab bar now
   },
   
   // Loading states
@@ -964,55 +890,7 @@ const styles = StyleSheet.create({
     color: "#fff",
   },
   
-  // Modern Header
-  modernHeader: {
-    paddingHorizontal: 15,
-    paddingTop: 15,
-    paddingBottom: 10,
-  },
-  headerCard: {
-    borderRadius: 20,
-    padding: 8,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
-    elevation: 8,
-  },
-  headerButtons: {
-    flexDirection: "row",
-    justifyContent: "space-around",
-    alignItems: "center",
-  },
-  modernHeaderButton: {
-    alignItems: "center",
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    borderRadius: 15,
-    backgroundColor: "transparent",
-    minWidth: 80,
-  },
-  activeModernButton: {
-    backgroundColor: "rgba(255, 0, 255, 0.1)",
-    borderWidth: 2,
-    borderColor: "#ff00ff",
-  },
-  buttonIcon: {
-    fontSize: 20,
-    marginBottom: 4,
-  },
-  modernHeaderButtonText: {
-    fontSize: 13,
-    fontWeight: "600",
-    color: "#666",
-    letterSpacing: 0.3,
-  },
-  activeModernButtonText: {
-    color: "#ff00ff",
-    fontWeight: "700",
-  },
-  
-  // Old Header (keeping for reference)
+  // Header
   header: {
     height: HEADER_HEIGHT,
     flexDirection: "row",
@@ -1092,55 +970,6 @@ const styles = StyleSheet.create({
     textShadowRadius: 3,
   },
   
-  // Floating Stats Card
-  floatingStatsCard: {
-    position: "absolute",
-    bottom: 30,
-    left: 20,
-    right: 20,
-    zIndex: 6,
-  },
-  statsGradient: {
-    borderRadius: 20,
-    padding: 20,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.3,
-    shadowRadius: 15,
-    elevation: 15,
-  },
-  statsRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-around',
-  },
-  statItem: {
-    alignItems: 'center',
-    flex: 1,
-  },
-  statNumber: {
-    fontSize: 28,
-    fontWeight: '800',
-    color: '#ffffff',
-    textShadowColor: 'rgba(0, 0, 0, 0.3)',
-    textShadowOffset: { width: 1, height: 1 },
-    textShadowRadius: 2,
-  },
-  statLabel: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: 'rgba(255, 255, 255, 0.9)',
-    textTransform: 'uppercase',
-    letterSpacing: 1,
-    marginTop: 4,
-  },
-  statDivider: {
-    width: 1,
-    height: 40,
-    backgroundColor: 'rgba(255, 255, 255, 0.3)',
-    marginHorizontal: 20,
-  },
-  
   // Sliding panel
   scrollablePanel: {
     position: "absolute",
@@ -1153,9 +982,9 @@ const styles = StyleSheet.create({
     borderTopRightRadius: 25,
     shadowColor: "#000",
     shadowOffset: { width: 0, height: -5 },
-    shadowOpacity: 0.2,
-    shadowRadius: 15,
-    elevation: 15,
+    shadowOpacity: 0.1,
+    shadowRadius: 10,
+    elevation: 10,
     zIndex: 10,
   },
   gestureHandle: {
@@ -1174,22 +1003,12 @@ const styles = StyleSheet.create({
   panelHeader: {
     paddingVertical: 15,
     alignItems: "center",
-    flexDirection: "row",
-    justifyContent: "center",
   },
   nameTextInside: {
     fontSize: 24,
     fontFamily: "Audiowide-Regular",
     color: "#fff",
     textAlign: "center",
-    flex: 1,
-  },
-  swipeDownIndicator: {
-    fontSize: 16,
-    color: "rgba(255, 255, 255, 0.7)",
-    fontWeight: "bold",
-    position: "absolute",
-    right: 20,
   },
   
   // Tabs
@@ -1292,6 +1111,27 @@ const styles = StyleSheet.create({
     fontWeight: "600",
   },
   
+  // Brand bar
+  brandBar: {
+    position: 'absolute',
+    bottom: FOOTER_HEIGHT,
+    left: 0,
+    right: 0,
+    height: 14,
+    backgroundColor: '#ff00ff',
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 999,
+  },
+  venueBrandBar: {
+    backgroundColor: '#FFD700',
+  },
+  upArrow: {
+    fontSize: 12,
+    color: '#fff',
+    fontWeight: 'bold',
+    marginTop: -2,
+  },
   
   // Song components
   songsList: {

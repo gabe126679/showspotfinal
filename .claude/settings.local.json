@@ -1,7 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "Bash(npx expo:*)"
+      "Bash(npx expo:*)",
+      "Bash(touch:*)",
+      "Bash(tail:*)"
     ],
     "deny": []
   }

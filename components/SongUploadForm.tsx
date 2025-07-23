@@ -267,7 +267,7 @@ const SongUploadForm: React.FC<SongUploadFormProps> = ({
       );
 
       // Upload song image or use artist profile image
-      let songImagePath = artistData?.artistProfileImage || null;
+      let songImagePath = artistData?.artist_profile_image || null;
       if (songImage) {
         songImagePath = await uploadFileToSupabase(
           songImage,
@@ -281,7 +281,7 @@ const SongUploadForm: React.FC<SongUploadFormProps> = ({
         .from("songs")
         .insert({
           spotter_id: userId,                    // Required: uploader's spotter_id
-          artist_id: artistData.artistID,        // Required: artist_id from artists table
+          artist_id: artistData.artist_id,        // Required: artist_id from artists table
           song_type: 'artist',                   // Default to 'artist' type
           song_title: songTitle.trim(),          // Required: song title
           song_price: songPrice,                 // Required: price as string
@@ -422,10 +422,10 @@ const SongUploadForm: React.FC<SongUploadFormProps> = ({
             <TouchableOpacity style={styles.imageButton} onPress={handleImageUpload}>
               {songImage ? (
                 <Image source={{ uri: songImage.uri }} style={styles.imagePreview} />
-              ) : artistData?.artistProfileImage ? (
+              ) : artistData?.artist_profile_image ? (
                 <View style={styles.imagePreviewContainer}>
                   <Image 
-                    source={{ uri: artistData.artistProfileImage }} 
+                    source={{ uri: artistData.artist_profile_image }} 
                     style={[styles.imagePreview, styles.fallbackImage]} 
                   />
                   <Text style={styles.fallbackText}>Default (Your Profile)</Text>

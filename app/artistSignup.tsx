@@ -39,26 +39,26 @@ const ArtistSignup = () => {
         .from('artists')
         .insert([
           {
-            spotterID: user.id,
-            artistName,
-            mainInstrument,
-            artistProfileImage: '',
-            artistSecondaryImages: [],
+            spotter_id: user.id,
+            artist_name: artistName,
+            main_instrument: mainInstrument,
+            artist_profile_image: '',
+            artist_secondary_images: [],
           },
         ])
         .select();
 
       if (error || !data || !data[0]) throw error;
 
-      const artistID = data[0].artistID;
+      const artistID = data[0].artist_id;
       const { error: updateError } = await supabase
         .from('spotters')
-        .update({ isArtist: true, artistID })
+        .update({ is_artist: true, artist_id: artistID })
         .eq('id', user.id);
 
       if (updateError) throw updateError;
 
-      navigation.navigate('ArtistPicture', { artistID });
+      navigation.navigate('ArtistPicture', { artist_id: artistID });
     } catch (err) {
       console.error('Artist Signup Error:', err);
       Alert.alert('Error', 'Could not create artist profile');

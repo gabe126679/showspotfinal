@@ -487,12 +487,12 @@ const Player = () => {
         try {
           const { data, error } = await supabase
             .from('artists')
-            .select('artistName')
-            .eq('artistID', currentSong.artist_id)
+            .select('artist_name')
+            .eq('artist_id', currentSong.artist_id)
             .single();
 
           if (error) throw error;
-          setArtistName(data?.artistName || 'Unknown Artist');
+          setArtistName(data?.artist_name || 'Unknown Artist');
         } catch (error) {
           console.error('Error fetching artist name:', error);
           setArtistName('Unknown Artist');
@@ -981,7 +981,6 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(0, 0, 0, 0.8)",
     justifyContent: "center",
     alignItems: "center",
-    backdropFilter: "blur(10px)",
   },
   modalContent: {
     backgroundColor: "#1a1a1f",

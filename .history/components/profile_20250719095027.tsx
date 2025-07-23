@@ -73,7 +73,6 @@ const ARTIST_TABS: TabData[] = [
   { id: "activeShows", title: "active shows", expanded: false },
   { id: "pendingShows", title: "pending shows", expanded: false },
   { id: "backliningShows", title: "backlining shows", expanded: false },
-  { id: "performedShows", title: "performed shows", expanded: false },
   { id: "songs", title: "songs", expanded: false },
   { id: "albums", title: "albums", expanded: false },
   { id: "bands", title: "bands", expanded: false },
@@ -84,7 +83,9 @@ const VENUE_TABS: TabData[] = [
   { id: "activeShows", title: "active shows", expanded: false },
   { id: "pendingShows", title: "pending shows", expanded: false },
   { id: "backliningShows", title: "backlining shows", expanded: false },
-  { id: "hostedShows", title: "hosted shows", expanded: false },
+  { id: "songs", title: "songs", expanded: false },
+  { id: "albums", title: "albums", expanded: false },
+  { id: "bands", title: "bands", expanded: false },
   { id: "info", title: "venue info", expanded: false },
 ];
 
@@ -130,9 +131,6 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
   // Songs data
   const [songs, setSongs] = useState<Song[]>([]);
 
-  // Bands data
-  const [bands, setBands] = useState<any[]>([]);
-
   // Animation refs
   const panelTranslateY = useRef(new Animated.Value(COLLAPSED_TRANSLATE_Y)).current;
   const handleOpacity = useRef(new Animated.Value(1)).current;
@@ -143,13 +141,6 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
   // Fetch songs for current profile
   const fetchSongs = async () => {
     try {
-      // Venues don't have songs, so skip fetching for venue profiles
-      if (activeProfile === 'venue') {
-        console.log('Skipping song fetch for venue profile');
-        setSongs([]);
-        return;
-      }
-
       const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
       if (sessionError) throw sessionError;
 
@@ -164,6 +155,8 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
 
       if (activeProfile === 'artist' && artistID) {
         query = query.eq("artist_id", artistID);
+      } else if (activeProfile === 'venue' && venueID) {
+        query = query.eq("venue_id", venueID);
       } else if (activeProfile === 'spotter') {
         query = query.eq("spotter_id", userId);
       }
@@ -198,7 +191,7 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
         // Fetch spotter data
         const { data: spotterData, error: spotterError } = await supabase
           .from("spotters")
-          .select("full_name, spotter_profile_picture, is_artist, is_venue")
+          .select("full_name, spotter_profile_picture, isArtist, isVenue")
           .eq("id", userId)
           .single();
 
@@ -206,46 +199,36 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
 
         setSpotterName(spotterData.full_name || "Unnamed Spotter");
         setSpotterProfileImage(spotterData.spotter_profile_picture || null);
-        setIsArtist(spotterData.is_artist);
-        setIsVenue(spotterData.is_venue);
+        setIsArtist(spotterData.isArtist);
+        setIsVenue(spotterData.isVenue);
 
         // If artist, fetch artist data
-        if (spotterData.is_artist) {
+        if (spotterData.isArtist) {
           const { data: artistInfo, error: artistError } = await supabase
             .from("artists")
             .select("*")
-            .eq("spotter_id", userId)
+            .eq("spotterID", userId)
             .single();
 
           if (artistError) throw artistError;
           if (artistInfo) {
-            setArtistID(artistInfo.artist_id);
+            setArtistID(artistInfo.artistID);
             setArtistData(artistInfo);
             setIsOwner(true);
-
-            // Fetch bands for this artist
-            const { data: artistBands, error: bandsError } = await supabase
-              .from("bands")
-              .select("*")
-              .contains("band_members", [artistInfo.artist_id]);
-
-            if (!bandsError && artistBands) {
-              setBands(artistBands);
-            }
           }
         }
 
         // If venue, fetch venue data
-        if (spotterData.is_venue) {
+        if (spotterData.isVenue) {
           const { data: venueInfo, error: venueError } = await supabase
             .from("venues")
             .select("*")
-            .eq("spotter_id", userId)
+            .eq("spotterID", userId)
             .single();
 
           if (venueError) throw venueError;
           if (venueInfo) {
-            setVenueID(venueInfo.venue_id);
+            setVenueID(venueInfo.venueID);
             setVenueData(venueInfo);
             setIsOwner(true);
           }
@@ -268,12 +251,12 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
     fetchProfileData();
   }, [fadeAnim]);
 
-  // Fetch songs when profile changes (skip venues)
+  // Fetch songs when profile changes
   useEffect(() => {
-    if (activeProfile && (artistID || activeProfile === 'spotter')) {
+    if (activeProfile && (artistID || venueID || activeProfile === 'spotter')) {
       fetchSongs();
     }
-  }, [activeProfile, artistID]);
+  }, [activeProfile, artistID, venueID]);
 
   // Pan responder for gesture handling
   const panResponder = useRef(
@@ -359,9 +342,9 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
       if (activeProfile === 'spotter') {
         name = spotterName || 'User';
       } else if (activeProfile === 'artist') {
-        name = artistData?.artist_name || 'Artist';
+        name = artistData?.artistName || 'Artist';
       } else if (activeProfile === 'venue') {
-        name = venueData?.venue_name || 'Venue';
+        name = venueData?.venueName || 'Venue';
       }
       
       onProfileDataChange({
@@ -369,7 +352,7 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
         type: activeProfile
       });
     }
-  }, [activeProfile, spotterName, artistData?.artist_name, venueData?.venue_name, onProfileDataChange]);
+  }, [activeProfile, spotterName, artistData?.artistName, venueData?.venueName, onProfileDataChange]);
 
   const collapsePanel = useCallback(() => {
     setExpanded(false);
@@ -503,22 +486,22 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
       };
     } else if (activeProfile === 'artist') {
       return {
-        name: artistData?.artist_name || "Artist",
-        image: artistData?.artist_profile_image,
+        name: artistData?.artistName || "Artist",
+        image: artistData?.artistProfileImage,
         tabs: artistTabs,
         images: artistData ? [
-          artistData.artist_profile_image, 
-          ...(artistData.artist_secondary_images || [])
+          artistData.artistProfileImage, 
+          ...(artistData.artistSecondaryImages || [])
         ].filter(Boolean) : [],
       };
     } else {
       return {
-        name: venueData?.venue_name || "Venue",
-        image: venueData?.venue_profile_image,
+        name: venueData?.venueName || "Venue",
+        image: venueData?.venueProfileImage,
         tabs: venueTabs,
         images: venueData ? [
-          venueData.venue_profile_image, 
-          ...(venueData.venue_secondary_images || [])
+          venueData.venueProfileImage, 
+          ...(venueData.venueSecondaryImages || [])
         ].filter(Boolean) : [],
       };
     }
@@ -770,33 +753,6 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
                     >
                       {songs.map((song) => (
                         <SongItem key={song.song_id} song={song} />
-                      ))}
-                    </ScrollView>
-                  ) : tab.id === "bands" && bands.length > 0 ? (
-                    <ScrollView 
-                      style={styles.songsList}
-                      showsVerticalScrollIndicator={false}
-                      nestedScrollEnabled={true}
-                    >
-                      {bands.map((band) => (
-                        <TouchableOpacity 
-                          key={band.band_id}
-                          style={styles.bandItem}
-                          onPress={() => navigation.navigate('BandPublicProfile', { band_id: band.band_id })}
-                        >
-                          <Image 
-                            source={{ uri: band.band_profile_picture || 'https://via.placeholder.com/60' }}
-                            style={styles.bandImage}
-                          />
-                          <View style={styles.bandInfo}>
-                            <Text style={styles.bandName}>{band.band_name}</Text>
-                            <Text style={styles.bandStatus}>Status: {band.band_status}</Text>
-                            <Text style={styles.bandMembers}>
-                              {band.band_members?.length || 0} members
-                            </Text>
-                          </View>
-                          <Text style={styles.viewProfileText}>View →</Text>
-                        </TouchableOpacity>
                       ))}
                     </ScrollView>
                   ) : (
@@ -1191,7 +1147,7 @@ const styles = StyleSheet.create({
     top: COLLAPSED_HEIGHT,
     left: 0,
     right: 0,
-    bottom: FOOTER_HEIGHT - 170,
+    bottom: FOOTER_HEIGHT - 160,
     backgroundColor: "#fff",
     borderTopLeftRadius: 25,
     borderTopRightRadius: 25,
@@ -1385,55 +1341,6 @@ const styles = StyleSheet.create({
   playButtonText: {
     fontSize: 16,
     color: '#fff',
-  },
-  
-  // Band styles
-  bandItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 12,
-    paddingHorizontal: 15,
-    marginBottom: 10,
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
-  },
-  bandImage: {
-    width: 60,
-    height: 60,
-    borderRadius: 30,
-    marginRight: 15,
-  },
-  bandInfo: {
-    flex: 1,
-  },
-  bandName: {
-    fontSize: 16,
-    fontFamily: 'Amiko-Regular',
-    fontWeight: '600',
-    color: '#333',
-    marginBottom: 4,
-  },
-  bandStatus: {
-    fontSize: 14,
-    fontFamily: 'Amiko-Regular',
-    color: '#666',
-    marginBottom: 2,
-  },
-  bandMembers: {
-    fontSize: 12,
-    fontFamily: 'Amiko-Regular',
-    color: '#999',
-  },
-  viewProfileText: {
-    fontSize: 14,
-    fontFamily: 'Amiko-Regular',
-    color: '#ff00ff',
-    fontWeight: '600',
   },
 });
 

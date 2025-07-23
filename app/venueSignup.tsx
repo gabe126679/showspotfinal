@@ -109,28 +109,28 @@ const VenueSignup = () => {
       const { data, error } = await supabase
         .from('venues')
         .insert([{
-          spotterID: user.id,
-          venueName,
-          venueOwner,
-          venueAddress: venueAddressObject,
-          venueMaxCap,
-          venueProfileImage: '',
-          venueSecondaryImages: [],
+          spotter_id: user.id,
+          venue_name: venueName,
+          venue_owner: venueOwner,
+          venue_address: venueAddressObject,
+          venue_max_cap: venueMaxCap,
+          venue_profile_image: '',
+          venue_secondary_images: [],
         }])
         .select();
 
       if (error || !data || !data[0]) throw error;
 
-      const venueID = data[0].venueID;
+      const venueID = data[0].venue_id;
 
       const { error: updateError } = await supabase
         .from('spotters')
-        .update({ isVenue: true, venueID })
+        .update({ is_venue: true, venue_id: venueID })
         .eq('id', user.id);
 
       if (updateError) throw updateError;
 
-      navigation.navigate('VenuePicture', { venueID });
+      navigation.navigate('VenuePicture', { venue_id: venueID });
     } catch (err) {
       console.error('Venue Signup Error:', err);
       Alert.alert('Error', 'Could not create venue profile.');

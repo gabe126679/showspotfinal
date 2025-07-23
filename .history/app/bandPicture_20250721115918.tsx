@@ -23,7 +23,8 @@ interface ImageState {
   type: string;
 }
 
-export default function ArtistPicture({ navigation }) {
+export default function BandPicture({ route, navigation }) {
+  const { band_id } = route.params;
   const [images, setImages] = useState<(ImageState | null)[]>(Array(MAX_IMAGES).fill(null));
   const [loading, setLoading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<number>(0);
@@ -69,8 +70,8 @@ export default function ArtistPicture({ navigation }) {
     setImages(newImages);
   };
 
-  const uploadSingleImage = async (imageData: ImageState, userId: string): Promise<string> => {
-    const filePath = `${userId}/${imageData.fileName}`;
+  const uploadSingleImage = async (imageData: ImageState, bandId: string): Promise<string> => {
+    const filePath = `${bandId}/${imageData.fileName}`;
 
     try {
       // Method 1: Try FormData first (works with most Supabase setups)
@@ -84,7 +85,7 @@ export default function ArtistPicture({ navigation }) {
 
         const { error: uploadError } = await supabase
           .storage
-          .from('artist-secondary-images')
+          .from('band-secondary-images')
           .upload(filePath, formData, {
             contentType: imageData.type,
             upsert: true,
@@ -94,7 +95,7 @@ export default function ArtistPicture({ navigation }) {
           // FormData worked, get public URL
           const { data: publicUrlData } = supabase
             .storage
-            .from('artist-secondary-images')
+            .from('band-secondary-images')
             .getPublicUrl(filePath);
 
           const publicUrl = publicUrlData?.publicUrl;
@@ -119,7 +120,7 @@ export default function ArtistPicture({ navigation }) {
         // Upload base64 data directly
         const { error: uploadError } = await supabase
           .storage
-          .from('artist-secondary-images')
+          .from('band-secondary-images')
           .upload(filePath, base64, {
             contentType: imageData.type,
             upsert: true,
@@ -133,7 +134,7 @@ export default function ArtistPicture({ navigation }) {
         // Get public URL
         const { data: publicUrlData } = supabase
           .storage
-          .from('artist-secondary-images')
+          .from('band-secondary-images')
           .getPublicUrl(filePath);
 
         const publicUrl = publicUrlData?.publicUrl;
@@ -161,10 +162,6 @@ export default function ArtistPicture({ navigation }) {
     setUploadProgress(0);
 
     try {
-      const { data: sessionData } = await supabase.auth.getSession();
-      const user = sessionData?.session?.user;
-      if (!user) throw new Error('No user session found');
-
       const uploadedUrls: string[] = [];
       const totalImages = validImages.length;
 
@@ -172,7 +169,7 @@ export default function ArtistPicture({ navigation }) {
       for (let i = 0; i < validImages.length; i++) {
         const imageData = validImages[i];
         try {
-          const publicUrl = await uploadSingleImage(imageData, user.id);
+          const publicUrl = await uploadSingleImage(imageData, band_id);
           uploadedUrls.push(publicUrl);
           setUploadProgress(((i + 1) / totalImages) * 100);
         } catch (error) {
@@ -185,14 +182,14 @@ export default function ArtistPicture({ navigation }) {
         throw new Error('All image uploads failed');
       }
 
-      // Update the artists table
+      // Update the bands table
       const { error: updateError } = await supabase
-        .from('artists')
+        .from('bands')
         .update({
-          artist_profile_image: uploadedUrls[0], // First image as profile image
-          artist_secondary_images: uploadedUrls, // All images as secondary images
+          band_profile_picture: uploadedUrls[0], // First image as profile image
+          band_secondary_pictures: uploadedUrls, // All images as secondary images
         })
-        .eq('spotter_id', user.id);
+        .eq('band_id', band_id);
 
       if (updateError) {
         console.error('Database update error:', updateError);
@@ -205,7 +202,7 @@ export default function ArtistPicture({ navigation }) {
         : `${uploadedUrls.length} of ${validImages.length} images uploaded successfully.`;
       
       Alert.alert('Success', successMessage, [
-        { text: 'OK', onPress: () => navigation.navigate('BottomTabs') }
+        { text: 'OK', onPress: () => navigation.goBack() }
       ]);
 
     } catch (err: any) {
@@ -221,13 +218,24 @@ export default function ArtistPicture({ navigation }) {
     }
   };
 
+  const skipImages = () => {
+    Alert.alert(
+      'Skip Images?',
+      'You can always add images later. Are you sure you want to skip?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Skip', onPress: () => navigation.goBack() }
+      ]
+    );
+  };
+
   const hasImages = images.some(img => img !== null);
 
   return (
     <SafeAreaView style={styles.container}>
-      <Text style={styles.title}>Upload Artist Images</Text>
+      <Text style={styles.title}>Upload Band Images</Text>
       <Text style={styles.subtitle}>
-        Select up to {MAX_IMAGES} images. The first image will be your profile picture.
+        Select up to {MAX_IMAGES} images. The first image will be your band's profile picture.
       </Text>
       
       <ScrollView contentContainerStyle={styles.gridContainer}>
@@ -275,19 +283,29 @@ export default function ArtistPicture({ navigation }) {
         </View>
       )}
 
-      <TouchableOpacity 
-        style={[styles.button, (!hasImages || loading) && styles.buttonDisabled]} 
-        onPress={uploadImages} 
-        disabled={!hasImages || loading}
-      >
-        {loading ? (
-          <ActivityIndicator color="#fff" />
-        ) : (
-          <Text style={styles.buttonText}>
-            {hasImages ? 'Upload & Continue' : 'Select Images First'}
-          </Text>
-        )}
-      </TouchableOpacity>
+      <View style={styles.buttonContainer}>
+        <TouchableOpacity 
+          style={[styles.skipButton]} 
+          onPress={skipImages} 
+          disabled={loading}
+        >
+          <Text style={styles.skipButtonText}>Skip Images</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity 
+          style={[styles.button, (!hasImages || loading) && styles.buttonDisabled]} 
+          onPress={uploadImages} 
+          disabled={!hasImages || loading}
+        >
+          {loading ? (
+            <ActivityIndicator color="#fff" />
+          ) : (
+            <Text style={styles.buttonText}>
+              {hasImages ? 'Upload & Continue' : 'Select Images First'}
+            </Text>
+          )}
+        </TouchableOpacity>
+      </View>
     </SafeAreaView>
   );
 }
@@ -389,12 +407,19 @@ const styles = StyleSheet.create({
     backgroundColor: '#2a2882',
     borderRadius: 2,
   },
+  buttonContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: 20,
+  },
   button: {
     backgroundColor: '#2a2882',
     paddingVertical: 14,
+    paddingHorizontal: 20,
     borderRadius: 12,
-    marginTop: 20,
     alignItems: 'center',
+    flex: 0.6,
   },
   buttonDisabled: {
     backgroundColor: '#ccc',
@@ -403,5 +428,20 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 16,
     fontWeight: 'bold',
+  },
+  skipButton: {
+    backgroundColor: 'transparent',
+    borderWidth: 1,
+    borderColor: '#ccc',
+    paddingVertical: 14,
+    paddingHorizontal: 20,
+    borderRadius: 12,
+    alignItems: 'center',
+    flex: 0.35,
+  },
+  skipButtonText: {
+    color: '#666',
+    fontSize: 16,
+    fontWeight: '500',
   },
 });

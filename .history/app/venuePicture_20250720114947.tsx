@@ -23,7 +23,7 @@ interface ImageState {
   type: string;
 }
 
-export default function ArtistPicture({ navigation }) {
+export default function VenuePicture({ navigation }) {
   const [images, setImages] = useState<(ImageState | null)[]>(Array(MAX_IMAGES).fill(null));
   const [loading, setLoading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<number>(0);
@@ -37,7 +37,7 @@ export default function ArtistPicture({ navigation }) {
       }
 
       const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.images,
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
         allowsEditing: true,
         aspect: [1, 1], // Square aspect ratio
         quality: 0.8, // Reduced quality for smaller file sizes
@@ -84,7 +84,7 @@ export default function ArtistPicture({ navigation }) {
 
         const { error: uploadError } = await supabase
           .storage
-          .from('artist-secondary-images')
+          .from('venue-secondary-images')
           .upload(filePath, formData, {
             contentType: imageData.type,
             upsert: true,
@@ -94,7 +94,7 @@ export default function ArtistPicture({ navigation }) {
           // FormData worked, get public URL
           const { data: publicUrlData } = supabase
             .storage
-            .from('artist-secondary-images')
+            .from('venue-secondary-images')
             .getPublicUrl(filePath);
 
           const publicUrl = publicUrlData?.publicUrl;
@@ -119,7 +119,7 @@ export default function ArtistPicture({ navigation }) {
         // Upload base64 data directly
         const { error: uploadError } = await supabase
           .storage
-          .from('artist-secondary-images')
+          .from('venue-secondary-images')
           .upload(filePath, base64, {
             contentType: imageData.type,
             upsert: true,
@@ -133,7 +133,7 @@ export default function ArtistPicture({ navigation }) {
         // Get public URL
         const { data: publicUrlData } = supabase
           .storage
-          .from('artist-secondary-images')
+          .from('venue-secondary-images')
           .getPublicUrl(filePath);
 
         const publicUrl = publicUrlData?.publicUrl;
@@ -185,12 +185,12 @@ export default function ArtistPicture({ navigation }) {
         throw new Error('All image uploads failed');
       }
 
-      // Update the artists table
+      // Update the venues table
       const { error: updateError } = await supabase
-        .from('artists')
+        .from('venues')
         .update({
-          artist_profile_image: uploadedUrls[0], // First image as profile image
-          artist_secondary_images: uploadedUrls, // All images as secondary images
+          venue_profile_image: uploadedUrls[0], // First image as profile image
+          venue_secondary_images: uploadedUrls, // All images as secondary images
         })
         .eq('spotter_id', user.id);
 
@@ -225,7 +225,7 @@ export default function ArtistPicture({ navigation }) {
 
   return (
     <SafeAreaView style={styles.container}>
-      <Text style={styles.title}>Upload Artist Images</Text>
+      <Text style={styles.title}>Upload Venue Images</Text>
       <Text style={styles.subtitle}>
         Select up to {MAX_IMAGES} images. The first image will be your profile picture.
       </Text>

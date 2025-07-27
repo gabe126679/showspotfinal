@@ -1,8 +1,11 @@
 import React, { useEffect, useState, useRef } from "react";
-import { StyleSheet, View, Dimensions, Text, TouchableOpacity } from "react-native";
+import { StyleSheet, View, Dimensions, Text, TouchableOpacity, StatusBar } from "react-native";
 import MapView, { Marker, PROVIDER_GOOGLE } from "react-native-maps";
 import * as Location from "expo-location";
 import { supabase } from "../lib/supabase";
+import ShowSpotHeader from './ShowSpotHeader';
+import { notificationService } from '../services/notificationService';
+import NotificationManager from './NotificationManager';
 
 const { width, height } = Dimensions.get("window");
 
@@ -13,9 +16,13 @@ const MapHome = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [mapReady, setMapReady] = useState(false);
+  const [showNotifications, setShowNotifications] = useState(false);
+  const [currentUser, setCurrentUser] = useState(null);
 
-  // Set initial region centered on venue area instead of user location
+  // Get current user and set initial region
   useEffect(() => {
+    getCurrentUser();
+    
     // Set region to Albany/Saratoga Springs area where venues are located
     const venueRegion = {
       latitude: 42.8, // Center between Albany and Saratoga Springs
@@ -24,19 +31,27 @@ const MapHome = () => {
       longitudeDelta: 0.15,
     };
     
-    console.log("🗺️ Setting initial region to venue area:", venueRegion);
     setRegion(venueRegion);
     
     // Still request location permission for "my location" button
     (async () => {
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== "granted") {
-        console.log("📍 Location permission not granted");
       } else {
-        console.log("📍 Location permission granted");
       }
     })();
   }, []);
+
+  const getCurrentUser = async () => {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.user) {
+        setCurrentUser(session.user);
+      }
+    } catch (error) {
+      console.error('Error getting current user:', error);
+    }
+  };
 
   // Fetch venues from Supabase
   const fetchVenues = async () => {
@@ -44,26 +59,20 @@ const MapHome = () => {
       setLoading(true);
       setError(null);
       
-      console.log("🔍 Fetching venues from database...");
       
       // Check authentication status
       const { data: { session }, error: sessionError } = await supabase.auth.getSession();
-      console.log("🔐 Current session:", session ? "✅ Authenticated" : "❌ Not authenticated");
       if (sessionError) {
-        console.log("🔐 Session error:", sessionError);
       }
       
       // Try multiple query approaches
-      console.log("📋 Attempting query 1: Basic select with specific fields...");
       const { data, error, count } = await supabase
         .from("venues")
         .select("venue_id, venue_name, venue_address", { count: 'exact' });
         
-      console.log("📊 Query count result:", count);
 
       if (error) {
         console.error("❌ Error fetching venues:", error);
-        console.log("📋 Attempting query 2: Select all fields...");
         
         // Try selecting all fields
         const { data: allData, error: allError } = await supabase
@@ -74,7 +83,6 @@ const MapHome = () => {
           console.error("❌ Error with select all:", allError);
           
           // Try with an anonymous/public client to bypass RLS
-          console.log("📋 Attempting query 3: Anonymous client to bypass RLS...");
           try {
             const anonClient = supabase;
             const { data: anonData, error: anonError } = await anonClient
@@ -86,7 +94,6 @@ const MapHome = () => {
               setError(`All queries failed. Last error: ${anonError.message}`);
               return;
             } else {
-              console.log("✅ Anonymous query worked! Data:", anonData);
               return handleVenueData(anonData);
             }
           } catch (anonErr) {
@@ -95,24 +102,19 @@ const MapHome = () => {
             return;
           }
         } else {
-          console.log("✅ Select all worked! Data:", allData);
           // Use the all data but only the fields we need
           const filteredData = allData?.map(venue => ({
             venue_id: venue.venue_id,
             venue_name: venue.venue_name,
             venue_address: venue.venue_address
           }));
-          console.log("📊 Filtered data:", filteredData);
           return handleVenueData(filteredData);
         }
       }
 
-      console.log("📊 Raw venue data received:", data);
-      console.log("📊 Number of venues found:", data?.length || 0);
       
       // Test: Try to fetch specific venue IDs we know exist
       if (data && data.length < 3) {
-        console.log("🧪 Testing specific venue ID queries...");
         const knownVenueIDs = [
           "27c3f880-6138-4598-876e-c54c86ea3aa7", // Spac
           "6dc28860-ef22-4078-80dd-f6ee290c4cb9", // Empire live  
@@ -128,12 +130,9 @@ const MapHome = () => {
               .single();
               
             if (singleError) {
-              console.log(`❌ Cannot access venue ${venueID}:`, singleError.message);
             } else {
-              console.log(`✅ Can access venue ${venueID}:`, singleVenue.venue_name);
             }
           } catch (err) {
-            console.log(`💥 Exception accessing venue ${venueID}:`, err);
           }
         }
       }
@@ -151,7 +150,6 @@ const MapHome = () => {
   // Separate function to handle venue data processing
   const handleVenueData = (data: any[]) => {
     if (!data || data.length === 0) {
-      console.log("⚠️ No venues found in handleVenueData");
       
       // For testing: Add a default venue marker in NYC
       const testVenue = {
@@ -164,20 +162,16 @@ const MapHome = () => {
         }
       };
       
-      console.log("🧪 Adding test venue for debugging:", testVenue);
       setVenues([testVenue]);
       return;
     }
 
     const parsedVenues = (data || []).map((v, index) => {
-      console.log(`🏢 Processing venue ${index + 1}:`, v.venue_name);
-      console.log(`📍 Raw address data:`, v.venue_address);
       
       let parsedAddress = v.venue_address;
       if (typeof v.venue_address === "string") {
         try {
           parsedAddress = JSON.parse(v.venue_address);
-          console.log(`✅ Parsed address for ${v.venue_name}:`, parsedAddress);
         } catch (e) {
           console.warn(`❌ Invalid address JSON for ${v.venue_name}:`, v.venue_address);
           return null;
@@ -192,7 +186,6 @@ const MapHome = () => {
         return null;
       }
       
-      console.log(`✅ Valid venue: ${v.venue_name} at [${parsedAddress.latitude}, ${parsedAddress.longitude}]`);
       
       return {
         ...v,
@@ -200,19 +193,16 @@ const MapHome = () => {
       };
     }).filter(v => v !== null);
 
-    console.log(`🎯 Final processed venues (${parsedVenues.length}):`, parsedVenues);
     setVenues(parsedVenues);
   };
 
   // Function to center map on all venues
   const centerOnVenues = () => {
     if (venues.length === 0) {
-      console.log("❌ No venues to center on");
       return;
     }
 
     if (!mapRef.current) {
-      console.log("❌ Map ref not available yet");
       return;
     }
 
@@ -222,7 +212,6 @@ const MapHome = () => {
       longitude: venue.venue_address.longitude,
     }));
 
-    console.log("🎯 Centering map on venues:", coordinates);
     
     try {
       mapRef.current.fitToCoordinates(coordinates, {
@@ -234,7 +223,6 @@ const MapHome = () => {
         },
         animated: true,
       });
-      console.log("✅ Map centered successfully");
     } catch (error) {
       console.error("❌ Error centering map:", error);
       
@@ -249,22 +237,61 @@ const MapHome = () => {
         longitudeDelta: 0.2,
       };
       
-      console.log("🔄 Using fallback region:", fallbackRegion);
       setRegion(fallbackRegion);
+    }
+  };
+
+  // Handle notification press
+  const handleNotificationPress = () => {
+    setShowNotifications(true);
+  };
+
+  // Handle message press - create test notification
+  const handleMessagePress = async () => {
+    
+    if (!currentUser) {
+      console.error('No current user found');
+      return;
+    }
+
+    try {
+      // Get user's full name first
+      const userName = await notificationService.getUserFullName(currentUser.id);
+      
+      // Create test notification
+      const result = await notificationService.createTestNotification(currentUser.id, userName);
+      
+      if (result.success) {
+        console.log('✅ Test notification created successfully');
+        
+        // Manually trigger toast notification
+        if ((global as any).showNotificationToast) {
+          (global as any).showNotificationToast(result.data);
+        }
+        
+        // Manually refresh unread count
+        if ((global as any).refreshNotificationCount) {
+          setTimeout(() => {
+            (global as any).refreshNotificationCount();
+          }, 500); // Small delay to ensure DB is updated
+        }
+      } else {
+        console.error('❌ Failed to create test notification:', result.error);
+      }
+    } catch (error) {
+      console.error('💥 Error creating test notification:', error);
     }
   };
 
 
   // Load venues on component mount
   useEffect(() => {
-    console.log("🚀 MapHome component mounted, loading venues...");
     fetchVenues(); // Load venues immediately
   }, []);
 
   // Auto-center when both map is ready and venues are loaded
   useEffect(() => {
     if (venues.length > 0 && mapReady && mapRef.current) {
-      console.log("🎯 Map ready + venues loaded, auto-centering...");
       setTimeout(() => {
         centerOnVenues();
       }, 500); // Shorter delay since we know map is ready
@@ -281,11 +308,9 @@ const MapHome = () => {
         const { data: { session } } = await supabase.auth.getSession();
         
         if (!session) {
-          console.log("ℹ️ No session found; venues will load but real-time updates disabled.");
           return;
         }
 
-        console.log("🔄 Setting up real-time venue updates...");
         
         channel = supabase
           .channel("venues-realtime")
@@ -294,12 +319,10 @@ const MapHome = () => {
             schema: "public",
             table: "venues",
           }, payload => {
-            console.log("🔔 Venue change received:", payload);
             fetchVenues(); // Re-fetch on insert/update/delete
           })
           .subscribe();
 
-        console.log("✅ Subscribed to real-time venue updates.");
       } catch (error) {
         console.error("❌ Error setting up real-time:", error);
       }
@@ -310,13 +333,25 @@ const MapHome = () => {
     return () => {
       if (channel) {
         supabase.removeChannel(channel);
-        console.log("🔌 Real-time venue channel removed.");
       }
     };
   }, []);
 
   return (
     <View style={styles.container}>
+      <StatusBar barStyle="light-content" backgroundColor="#2a2882" />
+      <ShowSpotHeader 
+        showBackButton={false}
+        onNotificationPress={handleNotificationPress}
+        onMessagePress={handleMessagePress}
+        isVenue={false}
+      />
+      
+      {/* Notification Manager */}
+      <NotificationManager
+        showNotificationPage={showNotifications}
+        onCloseNotificationPage={() => setShowNotifications(false)}
+      />
       {error && (
         <View style={styles.errorContainer}>
           <Text style={styles.errorText}>❌ {error}</Text>
@@ -335,12 +370,16 @@ const MapHome = () => {
           provider={PROVIDER_GOOGLE}
           style={styles.map}
           region={region}
-          showsUserLocation
-          showsMyLocationButton
+          showsUserLocation={true}
+          showsMyLocationButton={true}
           customMapStyle={aubergineStyle}
+          mapPadding={{
+            top: 0,
+            right: 10,
+            bottom: 110, // Increased padding to move My Location button higher up
+            left: 0,
+          }}
           onMapReady={() => {
-            console.log("🗺️ Map is ready!");
-            console.log(`📍 Current venues on map: ${venues.length}`);
             setMapReady(true);
           }}
         >
@@ -348,7 +387,6 @@ const MapHome = () => {
             const lat = venue.venue_address.latitude;
             const lng = venue.venue_address.longitude;
             
-            console.log(`🔍 Attempting to render marker ${index + 1}: ${venue.venue_name} at [${lat}, ${lng}]`);
             
             // Validate coordinates one more time before rendering
             if (typeof lat !== 'number' || typeof lng !== 'number' || isNaN(lat) || isNaN(lng)) {
@@ -356,7 +394,6 @@ const MapHome = () => {
               return null;
             }
             
-            console.log(`✅ Rendering valid marker: ${venue.venue_name}`);
             
             return (
               <Marker
@@ -369,7 +406,6 @@ const MapHome = () => {
                 description={venue.venue_address.address || "Venue Location"}
                 pinColor="red"
                 onPress={() => {
-                  console.log(`📌 Marker pressed: ${venue.venue_name}`);
                 }}
               />
             );
@@ -386,13 +422,6 @@ const MapHome = () => {
           <Text style={styles.centerButtonText}>📍 Show All Venues</Text>
         </TouchableOpacity>
       )}
-      
-      {/* Debug info */}
-      <View style={styles.debugContainer}>
-        <Text style={styles.debugText}>
-          🏢 Venues: {venues.length} | 📍 Region: {region ? "✅" : "❌"}
-        </Text>
-      </View>
     </View>
   );
 };
@@ -415,15 +444,18 @@ const aubergineStyle = [
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+    width: '100%',
   },
   map: {
-    width,
-    height: height - 85, // Subtract bottom tab bar height
-    marginBottom: 85, // Account for bottom tab bar
+    width: '100%',
+    height: 690, // Further increased to ensure "My Location" button visibility
+    marginTop: 0,
+    marginBottom: 0,
+    position: 'relative',
   },
   errorContainer: {
     position: 'absolute',
-    top: 50,
+    top: 95, // Account for header height (85px) + small margin
     left: 20,
     right: 20,
     backgroundColor: 'rgba(255, 0, 0, 0.9)',
@@ -439,7 +471,7 @@ const styles = StyleSheet.create({
   },
   loadingContainer: {
     position: 'absolute',
-    top: 50,
+    top: 95, // Account for header height (85px) + small margin
     left: 20,
     right: 20,
     backgroundColor: 'rgba(42, 40, 130, 0.9)',
@@ -455,8 +487,8 @@ const styles = StyleSheet.create({
   },
   centerButton: {
     position: 'absolute',
-    top: 60,
-    right: 20,
+    top: 120,
+    left: 20, // Moved to left side to avoid conflict with My Location button
     backgroundColor: 'rgba(255, 0, 255, 0.9)',
     paddingHorizontal: 20,
     paddingVertical: 12,
@@ -473,22 +505,6 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: 'bold',
     textAlign: 'center',
-  },
-  debugContainer: {
-    position: 'absolute',
-    bottom: 120,
-    left: 20,
-    right: 20,
-    backgroundColor: 'rgba(0, 0, 0, 0.7)',
-    padding: 10,
-    borderRadius: 10,
-    zIndex: 1000,
-  },
-  debugText: {
-    color: 'white',
-    fontSize: 12,
-    textAlign: 'center',
-    fontFamily: 'monospace',
   },
 });
 

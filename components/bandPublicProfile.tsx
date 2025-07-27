@@ -13,33 +13,31 @@ import {
   StatusBar,
   Platform,
   Vibration,
-  FlatList,
+  Modal,
 } from "react-native";
 import { PanGestureHandler, State } from 'react-native-gesture-handler';
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useNavigation } from "@react-navigation/native";
+import { useNavigation, CommonActions } from "@react-navigation/native";
 import { useRouter } from "expo-router";
 import { supabase } from "../lib/supabase";
 import { LinearGradient } from "expo-linear-gradient";
 import { useMusicPlayer } from "./player";
+import ShowSpotHeader from "./ShowSpotHeader";
+import SongUploadForm from "./SongUploadForm";
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get("window");
-const IPHONE_16_HEIGHT = 852;
-const ACTUAL_TAB_BAR_HEIGHT = 85;
-const GESTURE_AREA_HEIGHT = 95;
+// iPhone 16 specific dimensions for gesture positioning - matching profile.tsx exactly
+const IPHONE_16_HEIGHT = 852; // iPhone 16 screen height
+const ACTUAL_TAB_BAR_HEIGHT = 85; // Bottom tab bar height
+const GESTURE_AREA_HEIGHT = 95; // Our gesture area height
 const HEADER_HEIGHT = 85;
 const FOOTER_HEIGHT = 85;
 const HANDLE_HEIGHT = 30;
 const TAB_HEIGHT = 80;
-const COLLAPSED_HEIGHT = 150;
+const COLLAPSED_HEIGHT = 150; // Reduced to eliminate gap
 const COLLAPSED_TRANSLATE_Y = SCREEN_HEIGHT - COLLAPSED_HEIGHT - FOOTER_HEIGHT;
-const IMAGE_SECTION_HEIGHT = SCREEN_HEIGHT - HEADER_HEIGHT - FOOTER_HEIGHT;
-
-interface TabData {
-  id: string;
-  title: string;
-  expanded: boolean;
-}
+// Optimized height for iPhone 16 - removes white gap
+const IMAGE_SECTION_HEIGHT = 610; // Further increased to eliminate white space
 
 interface Song {
   song_id: string;
@@ -50,6 +48,13 @@ interface Song {
   spotter_id: string;
   song_price: string;
   created_at: string;
+}
+
+interface TabData {
+  id: string;
+  title: string;
+  expanded: boolean;
+  data?: any[];
 }
 
 interface BandMember {
@@ -96,27 +101,51 @@ const BandPublicProfile: React.FC<BandPublicProfileProps> = ({ route }) => {
   const { band_id } = route.params;
   const navigation = useNavigation();
   const router = useRouter();
-  const { playTrack } = useMusicPlayer();
+  const { playSong } = useMusicPlayer();
 
-  // State management
+  // Band data states
   const [bandData, setBandData] = useState<BandData | null>(null);
   const [bandMembers, setBandMembers] = useState<BandMember[]>([]);
   const [songs, setSongs] = useState<Song[]>([]);
+  const [currentUser, setCurrentUser] = useState<any>(null);
+  const [isOwner, setIsOwner] = useState(false);
+  const [isBandMember, setIsBandMember] = useState(false);
+  
+  // Common states - matching profile.tsx exactly
   const [loading, setLoading] = useState(true);
-  const [currentImageIndex, setCurrentImageIndex] = useState(0);
+  const [error, setError] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState(false);
+  
+  // Song upload form state
+  const [showSongUploadForm, setShowSongUploadForm] = useState(false);
+  
+  // Full-screen image modal - matching profile.tsx exactly
+  const [showImageModal, setShowImageModal] = useState(false);
+  const [selectedImage, setSelectedImage] = useState<string | null>(null);
+  
+  // Handle image press for full-screen view
+  const handleImagePress = (imageUri: string) => {
+    setSelectedImage(imageUri);
+    setShowImageModal(true);
+  };
+  
+  // Tab state
   const [tabs, setTabs] = useState<TabData[]>(BAND_TABS);
 
-  // Animation setup - matching profile.tsx exactly
+  // Animation refs - matching profile.tsx exactly
   const panelTranslateY = useRef(new Animated.Value(COLLAPSED_TRANSLATE_Y)).current;
   const handleOpacity = useRef(new Animated.Value(1)).current;
   const nameOpacity = useRef(new Animated.Value(1)).current;
-  const scrollViewRef = useRef<ScrollView>(null);
-  const [expanded, setExpanded] = useState(false);
+  const fadeAnim = useRef(new Animated.Value(0)).current;
 
-  // Load band data
-  const loadBandData = async () => {
+  // Fetch band data
+  const fetchBandData = async () => {
     try {
       setLoading(true);
+
+      // Get current user session
+      const { data: { session } } = await supabase.auth.getSession();
+      setCurrentUser(session?.user);
 
       // Get band data
       const { data: band, error: bandError } = await supabase
@@ -126,8 +155,26 @@ const BandPublicProfile: React.FC<BandPublicProfileProps> = ({ route }) => {
         .single();
 
       if (bandError) throw bandError;
-
       setBandData(band);
+
+      // Check if current user is band creator or member
+      if (session?.user) {
+        // Check if user is band creator (by spotter_id)
+        const isCreator = band.band_creator === session.user.id;
+        setIsOwner(isCreator);
+
+        // Check if user is a band member (by artist_id)
+        if (band.band_members && band.band_members.length > 0) {
+          const { data: userArtist } = await supabase
+            .from('artists')
+            .select('artist_id')
+            .eq('spotter_id', session.user.id);
+          
+          const userArtistIds = userArtist?.map(a => a.artist_id) || [];
+          const isMember = userArtistIds.some(artistId => band.band_members.includes(artistId));
+          setIsBandMember(isMember);
+        }
+      }
 
       // Get band members details
       if (band.band_members && band.band_members.length > 0) {
@@ -146,83 +193,64 @@ const BandPublicProfile: React.FC<BandPublicProfileProps> = ({ route }) => {
         }
       }
 
-      // Get band songs (songs by any band member)
-      if (band.band_members && band.band_members.length > 0) {
-        const { data: bandSongs, error: songsError } = await supabase
-          .from('songs')
-          .select('*')
-          .in('artist_id', band.band_members)
-          .order('created_at', { ascending: false });
+      // Get band-specific songs
+      // Band members can see pending songs, non-members only see approved songs
+      let songsQuery = supabase
+        .from('songs')
+        .select('*')
+        .eq('band_id', band_id);
 
-        if (!songsError && bandSongs) {
-          setSongs(bandSongs);
-        }
+      if (isBandMember || isOwner) {
+        // Band members see all songs (pending and active)
+        songsQuery = songsQuery.in('song_status', ['pending', 'active']);
+      } else {
+        // Non-members only see approved active songs
+        songsQuery = songsQuery
+          .eq('song_status', 'active')
+          .eq('song_approved', true);
       }
 
-    } catch (error) {
-      console.error('Error loading band data:', error);
+      const { data: bandSongs, error: songsError } = await songsQuery
+        .order('created_at', { ascending: false });
+
+      console.log('🎵 Band songs query result:', { 
+        isBandMember, 
+        isOwner, 
+        bandSongs: bandSongs?.length || 0, 
+        error: songsError 
+      });
+
+      if (!songsError && bandSongs) {
+        setSongs(bandSongs);
+        console.log('🎵 Songs set:', bandSongs.map(s => ({ 
+          title: s.song_title, 
+          status: s.song_status, 
+          approved: s.song_approved 
+        })));
+      } else if (songsError) {
+        // If band_id column doesn't exist yet, fallback to empty array
+        console.log('Band songs query failed (band_id column may not exist yet):', songsError);
+        setSongs([]);
+      }
+
+      // Fade in animation - matching profile.tsx
+      Animated.timing(fadeAnim, {
+        toValue: 1,
+        duration: 500,
+        useNativeDriver: true,
+      }).start();
+      
+    } catch (err) {
+      console.error("Error fetching band data:", err);
+      setError(err instanceof Error ? err.message : "Failed to load band profile");
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    loadBandData();
-  }, [band_id]);
-
-  // Animation functions - exactly matching profile.tsx
-  const expandPanel = useCallback(() => {
-    setExpanded(true);
-    
-    Animated.parallel([
-      Animated.spring(panelTranslateY, {
-        toValue: 0,
-        useNativeDriver: true,
-        tension: 120,
-        friction: 8,
-        overshootClamping: false,
-      }),
-      Animated.timing(handleOpacity, {
-        toValue: 0,
-        duration: 200,
-        useNativeDriver: true,
-      }),
-      Animated.timing(nameOpacity, {
-        toValue: 1,
-        duration: 200,
-        useNativeDriver: true,
-      }),
-    ]).start();
-  }, [panelTranslateY, handleOpacity, nameOpacity]);
-
-  const collapsePanel = useCallback(() => {
-    setExpanded(false);
-    
-    // Collapse all tabs when panel closes
-    setTabs(prevTabs => 
-      prevTabs.map(tab => ({ ...tab, expanded: false }))
-    );
-    
-    Animated.parallel([
-      Animated.spring(panelTranslateY, {
-        toValue: COLLAPSED_TRANSLATE_Y,
-        useNativeDriver: true,
-        tension: 110,
-        friction: 8,
-        overshootClamping: false,
-      }),
-      Animated.timing(handleOpacity, {
-        toValue: 1,
-        duration: 200,
-        useNativeDriver: true,
-      }),
-      Animated.timing(nameOpacity, {
-        toValue: 0,
-        duration: 200,
-        useNativeDriver: true,
-      }),
-    ]).start();
-  }, [panelTranslateY, handleOpacity, nameOpacity]);
+    fetchBandData();
+  }, [band_id, fadeAnim]);
 
   // Pan responder for gesture handling - exactly matching profile.tsx
   const panResponder = useRef(
@@ -270,27 +298,152 @@ const BandPublicProfile: React.FC<BandPublicProfileProps> = ({ route }) => {
     })
   ).current;
 
+  const expandPanel = useCallback(() => {
+    setExpanded(true);
+    
+    Animated.parallel([
+      Animated.spring(panelTranslateY, {
+        toValue: 0,
+        useNativeDriver: true,
+        tension: 120,
+        friction: 7,
+        overshootClamping: false,
+      }),
+      Animated.timing(handleOpacity, {
+        toValue: 0.6,
+        duration: 200,
+        useNativeDriver: true,
+      }),
+      Animated.timing(nameOpacity, {
+        toValue: 0,
+        duration: 150,
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }, [panelTranslateY, handleOpacity, nameOpacity]);
+
+  const collapsePanel = useCallback(() => {
+    setExpanded(false);
+    
+    // Collapse all tabs when panel closes
+    setTabs(prevTabs => 
+      prevTabs.map(tab => ({ ...tab, expanded: false }))
+    );
+    
+    Animated.parallel([
+      Animated.spring(panelTranslateY, {
+        toValue: COLLAPSED_TRANSLATE_Y,
+        useNativeDriver: true,
+        tension: 110,
+        friction: 8,
+        overshootClamping: false,
+      }),
+      Animated.timing(handleOpacity, {
+        toValue: 1,
+        duration: 200,
+        useNativeDriver: true,
+      }),
+      Animated.timing(nameOpacity, {
+        toValue: 1,
+        duration: 200,
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }, [panelTranslateY, handleOpacity, nameOpacity]);
+
   // Gesture handler for panel header swipe down
   const handlePanelGesture = useCallback((event: any) => {
     if (event.nativeEvent.state === State.END) {
       const { translationY, velocityY } = event.nativeEvent;
-      if (translationY > 50 || velocityY > 500) {
+      
+      // Only allow swipe down when panel is expanded
+      if (expanded && (translationY > 50 || velocityY > 300)) {
         collapsePanel();
       }
     }
-  }, [collapsePanel]);
+  }, [expanded, collapsePanel]);
 
-  // Tab management
-  const toggleTab = (tabId: string) => {
+  const toggleTab = useCallback((tabId: string) => {
+    if (Platform.OS === 'ios') {
+      Vibration.vibrate(10);
+    }
+    
     setTabs(prevTabs =>
-      prevTabs.map(tab => ({
-        ...tab,
-        expanded: tab.id === tabId ? !tab.expanded : false,
-      }))
+      prevTabs.map(tab =>
+        tab.id === tabId
+          ? { ...tab, expanded: !tab.expanded }
+          : { ...tab, expanded: false }
+      )
     );
+  }, []);
+
+  const handleSongPress = (song: Song) => {
+    playSong(song, songs);
+    // Navigate back to the tab navigator and then to Player
+    try {
+      navigation.dispatch(
+        CommonActions.reset({
+          index: 0,
+          routes: [
+            {
+              name: 'BottomTabs',
+              state: {
+                routes: [
+                  { name: 'MapHome' },
+                  { name: 'Search' },
+                  { name: 'Create' },
+                  { name: 'Player' },
+                  { name: 'Profile' }
+                ],
+                index: 3, // Player tab index
+              },
+            },
+          ],
+        })
+      );
+    } catch (error) {
+      console.error('Navigation error:', error);
+      // Simple fallback - just go back and let user navigate manually
+      navigation.goBack();
+    }
   };
 
-  // Render functions
+  const SongItem: React.FC<{ song: Song }> = ({ song }) => (
+    <View style={[styles.songItem, song.song_status === 'pending' && styles.pendingSongItem]}>
+      <View style={styles.songInfo}>
+        <View style={styles.songTitleContainer}>
+          <Text style={styles.songTitle} numberOfLines={1}>
+            {song.song_title}
+          </Text>
+          {song.song_status === 'pending' && (
+            <Text style={styles.pendingLabel}>PENDING APPROVAL</Text>
+          )}
+        </View>
+        <Text style={styles.songPrice}>${song.song_price}</Text>
+      </View>
+      <TouchableOpacity
+        style={styles.playButton}
+        onPress={() => handleSongPress(song)}
+      >
+        <Text style={styles.playButtonText}>▶️</Text>
+      </TouchableOpacity>
+    </View>
+  );
+
+  // Get current band data for display
+  const getCurrentBandData = () => {
+    if (!bandData) return { name: "Band", images: [] };
+    
+    return {
+      name: bandData.band_name,
+      images: [
+        bandData.band_profile_picture, 
+        ...(bandData.band_secondary_pictures || [])
+      ].filter(Boolean),
+    };
+  };
+
+  // Render tab content
   const renderTabContent = (tab: TabData) => {
     if (!tab.expanded) return null;
 
@@ -298,7 +451,7 @@ const BandPublicProfile: React.FC<BandPublicProfileProps> = ({ route }) => {
       case 'members':
         return (
           <View style={styles.tabContent}>
-            {bandMembers.map((member, index) => (
+            {bandMembers.map((member) => (
               <View key={member.artist_id} style={styles.memberItem}>
                 <Image
                   source={{ 
@@ -320,22 +473,34 @@ const BandPublicProfile: React.FC<BandPublicProfileProps> = ({ route }) => {
       case 'songs':
         return (
           <View style={styles.tabContent}>
-            {songs.map((song, index) => (
-              <TouchableOpacity
-                key={song.song_id}
-                style={styles.songItem}
-                onPress={() => playTrack(song)}
+            {/* Add Song button for band members */}
+            {(isOwner || isBandMember) && (
+              <TouchableOpacity 
+                style={styles.addButton}
+                onPress={() => setShowSongUploadForm(true)}
               >
-                <Image
-                  source={{ uri: song.song_image || 'https://via.placeholder.com/60' }}
-                  style={styles.songImage}
-                />
-                <View style={styles.songInfo}>
-                  <Text style={styles.songTitle}>{song.song_title}</Text>
-                  <Text style={styles.songPrice}>${song.song_price}</Text>
-                </View>
+                <Text style={styles.addButtonText}>+ Upload Song</Text>
               </TouchableOpacity>
-            ))}
+            )}
+            
+            <ScrollView 
+              style={styles.songsList}
+              showsVerticalScrollIndicator={false}
+              nestedScrollEnabled={true}
+            >
+              {songs.length > 0 ? (
+                songs.map((song) => (
+                  <SongItem key={song.song_id} song={song} />
+                ))
+              ) : (
+                <Text style={styles.noSongsText}>
+                  {(isOwner || isBandMember) 
+                    ? "No songs uploaded yet. Upload your first band song!" 
+                    : "This band hasn't uploaded any songs yet."
+                  }
+                </Text>
+              )}
+            </ScrollView>
           </View>
         );
 
@@ -364,7 +529,7 @@ const BandPublicProfile: React.FC<BandPublicProfileProps> = ({ route }) => {
       default:
         return (
           <View style={styles.tabContent}>
-            <Text style={styles.placeholderText}>
+            <Text style={styles.tabContentText}>
               {tab.title} content coming soon...
             </Text>
           </View>
@@ -372,109 +537,152 @@ const BandPublicProfile: React.FC<BandPublicProfileProps> = ({ route }) => {
     }
   };
 
+  // Render loading state - matching profile.tsx exactly
   if (loading) {
     return (
       <SafeAreaView style={styles.container}>
+        <StatusBar barStyle="light-content" backgroundColor="#2a2882" />
         <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color="#2a2882" />
-          <Text style={styles.loadingText}>Loading band profile...</Text>
+          <LinearGradient
+            colors={["#ff00ff", "#2a2882"]}
+            style={styles.loadingGradient}
+          >
+            <ActivityIndicator size="large" color="#fff" />
+            <Text style={styles.loadingText}>Loading band profile...</Text>
+          </LinearGradient>
         </View>
       </SafeAreaView>
     );
   }
 
-  if (!bandData) {
+  // Render error state - matching profile.tsx exactly
+  if (error) {
     return (
       <SafeAreaView style={styles.container}>
+        <StatusBar barStyle="light-content" backgroundColor="#2a2882" />
         <View style={styles.errorContainer}>
-          <Text style={styles.errorText}>Band not found</Text>
+          <Text style={styles.errorText}>⚠️</Text>
+          <Text style={styles.errorMessage}>{error}</Text>
           <TouchableOpacity 
-            style={styles.backButton}
-            onPress={() => navigation.goBack()}
+            style={styles.retryButton}
+            onPress={() => {
+              setError(null);
+              setLoading(true);
+              fetchBandData();
+            }}
           >
-            <Text style={styles.backButtonText}>Go Back</Text>
+            <Text style={styles.retryText}>Retry</Text>
           </TouchableOpacity>
         </View>
       </SafeAreaView>
     );
   }
 
-  const images = [
-    bandData.band_profile_picture,
-    ...(bandData.band_secondary_pictures || [])
-  ].filter(img => img && img.trim() !== '');
+  const currentData = getCurrentBandData();
 
   return (
-    <SafeAreaView style={styles.container}>
-      <StatusBar barStyle="light-content" backgroundColor="#000" />
+    <View style={styles.container}>
+      <LinearGradient
+        colors={["rgba(255, 0, 255, 0.8)", "rgba(42, 40, 130, 0.8)"]}
+        style={StyleSheet.absoluteFillObject}
+      />
+      <StatusBar barStyle="light-content" backgroundColor="#2a2882" />
       
       {/* Header */}
-      <View style={styles.header}>
-        <TouchableOpacity 
-          style={styles.backArrow}
-          onPress={() => navigation.goBack()}
-        >
-          <Text style={styles.backArrowText}>←</Text>
-        </TouchableOpacity>
-        <Text style={styles.headerTitle}>{bandData.band_name}</Text>
-        <View style={styles.headerRight} />
-      </View>
+      <ShowSpotHeader 
+        showBackButton={true}
+        onBackPress={() => navigation.goBack()}
+        onNotificationPress={() => {
+          console.log('Notification pressed');
+        }}
+        onMessagePress={() => {
+          console.log('Message pressed');
+        }}
+        isVenue={false}
+      />
 
-      {/* Image Section with PanResponder */}
+      {/* Profile image section - matching profile.tsx exactly */}
       <Animated.View 
-        style={styles.imageSection}
+        style={[styles.imageSection, { opacity: fadeAnim }]} 
         {...panResponder.panHandlers}
       >
-        {images.length > 0 ? (
-          <FlatList
-            data={images}
-            horizontal
-            pagingEnabled
-            showsHorizontalScrollIndicator={false}
-            keyExtractor={(item, index) => `image-${index}`}
-            onMomentumScrollEnd={(event) => {
-              const index = Math.round(event.nativeEvent.contentOffset.x / SCREEN_WIDTH);
-              setCurrentImageIndex(index);
-            }}
-            renderItem={({ item }) => (
-              <Image source={{ uri: item }} style={styles.profileImage} />
-            )}
-          />
+        {currentData.images.length > 0 ? (
+          currentData.images.length > 1 ? (
+            <ScrollView
+              horizontal
+              pagingEnabled
+              showsHorizontalScrollIndicator={false}
+            >
+              {currentData.images.map((item, index) => (
+                <TouchableOpacity key={`band-image-${index}-${item?.substring(item.length - 10) || index}`} onPress={() => handleImagePress(item)}>
+                  <Image 
+                    source={{ uri: item }} 
+                    style={styles.profileImage}
+                    resizeMode="cover"
+                  />
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          ) : (
+            <TouchableOpacity onPress={() => handleImagePress(currentData.images[0])}>
+              <Image 
+                source={{ uri: currentData.images[0] }} 
+                style={styles.profileImage}
+                resizeMode="cover"
+              />
+            </TouchableOpacity>
+          )
         ) : (
-          <View style={styles.placeholderImageContainer}>
-            <Text style={styles.placeholderImageText}>No Images</Text>
-          </View>
+          <LinearGradient
+            colors={["#ff00ff20", "#2a288220"]}
+            style={styles.imagePlaceholder}
+          >
+            <Text style={styles.placeholderText}>No Image</Text>
+          </LinearGradient>
         )}
         
-        {/* Image indicators */}
-        {images.length > 1 && (
-          <View style={styles.imageIndicators}>
-            {images.map((_, index) => (
-              <View
-                key={index}
-                style={[
-                  styles.indicator,
-                  index === currentImageIndex && styles.activeIndicator,
-                ]}
-              />
-            ))}
-          </View>
-        )}
-
-        {/* Swipe up handle - matching profile.tsx */}
+        {/* Name and Rating Overlay - matching profile.tsx exactly */}
         <Animated.View 
-          style={[
-            styles.swipeUpHandle,
-            { opacity: handleOpacity }
-          ]}
+          style={[styles.nameRatingOverlay, { opacity: nameOpacity }]} 
+          pointerEvents="none"
         >
-          <View style={styles.handleBar} />
-          <Text style={styles.swipeUpText}>swipe up</Text>
-          <Text style={styles.swipeUpIndicator}>↑</Text>
+          {/* Name on bottom left */}
+          <View style={styles.nameContainer}>
+            <LinearGradient
+              colors={["rgba(0, 0, 0, 0.8)", "rgba(0, 0, 0, 0.4)"]}
+              style={styles.nameBackground}
+            >
+              <Text style={styles.profileNameText} numberOfLines={1}>
+                {currentData.name}
+              </Text>
+            </LinearGradient>
+          </View>
+          
+          {/* Rating on bottom right - bands get ratings */}
+          <View style={styles.ratingContainer}>
+            <LinearGradient
+              colors={["rgba(0, 0, 0, 0.8)", "rgba(0, 0, 0, 0.4)"]}
+              style={styles.ratingBackground}
+            >
+              <View style={styles.starsRow}>
+                {[1, 2, 3, 4, 5].map((star) => (
+                  <Image
+                    key={star}
+                    source={require('../assets/star.png')}
+                    style={[
+                      styles.starIcon,
+                      star <= 4 ? styles.filledStar : styles.emptyStar
+                    ]}
+                  />
+                ))}
+              </View>
+              <Text style={styles.ratingText}>4.2</Text>
+            </LinearGradient>
+          </View>
         </Animated.View>
       </Animated.View>
 
-      {/* Sliding panel - matching profile.tsx structure */}
+      {/* Sliding panel - matching profile.tsx exactly */}
       <Animated.View
         style={[
           styles.scrollablePanel,
@@ -488,43 +696,28 @@ const BandPublicProfile: React.FC<BandPublicProfileProps> = ({ route }) => {
           <LinearGradient
             colors={["#2a2882", "#ff00ff"]}
             style={styles.panelHeader}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 0 }}
           >
-            <View style={styles.nameContainer}>
-              <Animated.Text 
-                style={[
-                  styles.bandNameInPanel,
-                  { opacity: nameOpacity }
-                ]}
-              >
-                {bandData.band_name}
-              </Animated.Text>
-              <Text style={styles.swipeDownText}>swipe down</Text>
-              <Text style={styles.swipeDownIndicator}>↓</Text>
-            </View>
-
-            {/* Band Stats */}
-            <View style={styles.statsRow}>
-              <View style={styles.statItem}>
-                <Text style={styles.statNumber}>{bandMembers.length}</Text>
-                <Text style={styles.statLabel}>Members</Text>
+            <View style={styles.panelHeaderContent}>
+              {/* Band name and music icon on the right */}
+              <View style={styles.rightBandInfo}>
+                <Text style={styles.nameTextInside} numberOfLines={1}>
+                  {currentData.name}
+                </Text>
+                <Text style={styles.musicIcon}>🎵</Text>
               </View>
-              <View style={styles.statDivider} />
-              <View style={styles.statItem}>
-                <Text style={styles.statNumber}>{songs.length}</Text>
-                <Text style={styles.statLabel}>Songs</Text>
-              </View>
-              <View style={styles.statDivider} />
-              <View style={styles.statItem}>
-                <Text style={styles.statNumber}>{tabs.length}</Text>
-                <Text style={styles.statLabel}>Categories</Text>
-              </View>
+              
+              {/* Add subtle visual indicator for swipe down */}
+              {expanded && (
+                <Text style={styles.swipeDownIndicator}>▼</Text>
+              )}
             </View>
           </LinearGradient>
         </PanGestureHandler>
 
-        {/* Tabs */}
+        {/* Scrollable tabs */}
         <ScrollView
-          ref={scrollViewRef}
           style={styles.tabsContainer}
           bounces={false}
           showsVerticalScrollIndicator={false}
@@ -542,136 +735,273 @@ const BandPublicProfile: React.FC<BandPublicProfileProps> = ({ route }) => {
                 activeOpacity={0.7}
               >
                 <Text style={styles.dropdownText}>{tab.title}</Text>
-                <Animated.Text style={[
-                  styles.arrow,
-                  {
-                    transform: [{
-                      rotate: tab.expanded ? "180deg" : "0deg"
-                    }]
-                  }
-                ]}>
+                <Animated.Text
+                  style={[
+                    styles.arrow,
+                    {
+                      transform: [
+                        {
+                          rotate: tab.expanded ? "180deg" : "0deg",
+                        },
+                      ],
+                    },
+                  ]}
+                >
                   ▼
                 </Animated.Text>
               </TouchableOpacity>
+              
+              {/* Tab content */}
               {renderTabContent(tab)}
             </View>
           ))}
+          
+          {/* Action buttons - matching profile.tsx exactly */}
+          <View style={styles.actionButtons}>
+            <TouchableOpacity style={styles.actionButton}>
+              <LinearGradient
+                colors={["#ff00ff", "#2a2882"]}
+                style={styles.actionButtonGradient}
+              >
+                <TouchableOpacity onPress={() => navigation.navigate("BottomTabs" as never)}>
+                  <Text style={styles.actionButtonText}>
+                    View Artist Profile
+                  </Text>
+                </TouchableOpacity>
+              </LinearGradient>
+            </TouchableOpacity>
+            
+            <TouchableOpacity style={styles.actionButton}>
+              <LinearGradient
+                colors={["#2a2882", "#ff00ff"]}
+                style={styles.actionButtonGradient}
+              >
+                <TouchableOpacity onPress={() => navigation.navigate("BottomTabs" as never)}>
+                  <Text style={styles.actionButtonText}>
+                    View Spotter Profile
+                  </Text>
+                </TouchableOpacity>
+              </LinearGradient>
+            </TouchableOpacity>
+            
+            <TouchableOpacity style={styles.signOutButton}>
+              <Text style={styles.signOutText}>Sign Out</Text>
+            </TouchableOpacity>
+          </View>
         </ScrollView>
       </Animated.View>
-    </SafeAreaView>
+
+      {/* Full-Screen Image Modal - matching profile.tsx exactly */}
+      <Modal
+        visible={showImageModal}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setShowImageModal(false)}
+        statusBarTranslucent={true}
+      >
+        <View style={styles.modalContainer}>
+          <TouchableOpacity 
+            style={styles.modalCloseArea}
+            onPress={() => setShowImageModal(false)}
+            activeOpacity={1}
+          >
+            <View style={styles.modalImageContainer}>
+              {selectedImage && (
+                <Image
+                  source={{ uri: selectedImage }}
+                  style={styles.modalImage}
+                  resizeMode="contain"
+                />
+              )}
+            </View>
+            <TouchableOpacity 
+              style={styles.backButton}
+              onPress={() => setShowImageModal(false)}
+            >
+              <LinearGradient
+                colors={["rgba(0, 0, 0, 0.8)", "rgba(0, 0, 0, 0.6)"]}
+                style={styles.backButtonGradient}
+              >
+                <Text style={styles.backButtonText}>← Back</Text>
+              </LinearGradient>
+            </TouchableOpacity>
+          </TouchableOpacity>
+        </View>
+      </Modal>
+
+      {/* Song Upload Form Modal */}
+      <SongUploadForm
+        visible={showSongUploadForm}
+        onClose={() => {
+          setShowSongUploadForm(false);
+          // Refresh songs list after upload with small delay for DB consistency
+          setTimeout(() => {
+            fetchBandData();
+          }, 500);
+        }}
+        artistData={null}
+        bandData={bandData}
+        bandId={band_id}
+      />
+    </View>
   );
 };
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#000",
+    backgroundColor: "#fff",
+    justifyContent: "flex-start",
   },
+  
+  // Loading states - matching profile.tsx exactly
   loadingContainer: {
     flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: '#000',
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  loadingGradient: {
+    padding: 30,
+    borderRadius: 15,
+    alignItems: "center",
+    justifyContent: "center",
   },
   loadingText: {
-    color: '#fff',
-    marginTop: 10,
     fontSize: 16,
+    fontFamily: "Amiko-Regular",
+    color: "#fff",
+    marginTop: 15,
   },
+  
+  // Error states - matching profile.tsx exactly
   errorContainer: {
     flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: '#000',
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 20,
   },
   errorText: {
-    color: '#fff',
-    fontSize: 18,
+    fontSize: 50,
     marginBottom: 20,
   },
-  backButton: {
-    backgroundColor: '#2a2882',
+  errorMessage: {
+    fontSize: 16,
+    fontFamily: "Amiko-Regular",
+    color: "#666",
+    textAlign: "center",
+    marginBottom: 20,
+  },
+  retryButton: {
+    backgroundColor: "#ff00ff",
     paddingHorizontal: 20,
     paddingVertical: 10,
     borderRadius: 8,
   },
-  backButtonText: {
-    color: '#fff',
+  retryText: {
     fontSize: 16,
-  },
-  header: {
-    height: HEADER_HEIGHT,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingHorizontal: 20,
-    backgroundColor: "#000",
-    borderBottomWidth: 1,
-    borderBottomColor: "#333",
-  },
-  backArrow: {
-    width: 40,
-    height: 40,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  backArrowText: {
+    fontFamily: "Amiko-Regular",
     color: "#fff",
-    fontSize: 24,
-    fontWeight: "bold",
   },
-  headerTitle: {
-    color: "#fff",
-    fontSize: 18,
-    fontWeight: "600",
-    flex: 1,
-    textAlign: "center",
-  },
-  headerRight: {
-    width: 40,
-  },
+  
+  // Image section - matching profile.tsx exactly
   imageSection: {
     height: IMAGE_SECTION_HEIGHT,
+    width: SCREEN_WIDTH,
     position: "relative",
+    backgroundColor: "#000",
+    overflow: 'hidden',
+    marginTop: -20,//ve image up 15px from natural position
   },
   profileImage: {
     width: SCREEN_WIDTH,
     height: IMAGE_SECTION_HEIGHT,
-    resizeMode: "cover",
   },
-  placeholderImageContainer: {
-    width: SCREEN_WIDTH,
-    height: IMAGE_SECTION_HEIGHT,
-    backgroundColor: '#333',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  placeholderImageText: {
-    color: '#666',
-    fontSize: 18,
-  },
-  imageIndicators: {
-    position: "absolute",
-    bottom: 20,
-    left: 0,
-    right: 0,
-    flexDirection: "row",
+  imagePlaceholder: {
+    width: "100%",
+    height: "100%",
     justifyContent: "center",
     alignItems: "center",
   },
-  indicator: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: "rgba(255, 255, 255, 0.5)",
-    marginHorizontal: 4,
+  placeholderText: {
+    fontSize: 18,
+    fontFamily: "Amiko-Regular",
+    color: "#999",
   },
-  activeIndicator: {
-    backgroundColor: "rgba(255, 255, 255, 1)",
-    width: 12,
-    height: 12,
-    borderRadius: 6,
+  
+  // Name and Rating Overlay - matching profile.tsx exactly
+  nameRatingOverlay: {
+    position: "absolute",
+    bottom: 0,
+    left: 0,
+    right: 0,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-end',
+    padding: 15,
+    zIndex: 6,
   },
+  nameContainer: {
+    flex: 1,
+    marginRight: 15,
+  },
+  nameBackground: {
+    paddingHorizontal: 15,
+    paddingVertical: 10,
+    borderRadius: 15,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 8,
+  },
+  profileNameText: {
+    fontSize: 22,
+    fontFamily: "Audiowide-Regular",
+    color: '#ffffff',
+    fontWeight: '700',
+    textShadowColor: 'rgba(0, 0, 0, 0.5)',
+    textShadowOffset: { width: 1, height: 1 },
+    textShadowRadius: 3,
+  },
+  ratingContainer: {
+    alignItems: 'flex-end',
+  },
+  ratingBackground: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 15,
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 8,
+  },
+  starsRow: {
+    flexDirection: 'row',
+    marginBottom: 4,
+  },
+  starIcon: {
+    width: 16,
+    height: 16,
+    marginHorizontal: 1,
+  },
+  filledStar: {
+    tintColor: '#FFD700',
+  },
+  emptyStar: {
+    tintColor: 'rgba(255, 255, 255, 0.3)',
+  },
+  ratingText: {
+    fontSize: 14,
+    fontFamily: "Amiko-Regular",
+    color: '#ffffff',
+    fontWeight: '600',
+    textShadowColor: 'rgba(0, 0, 0, 0.5)',
+    textShadowOffset: { width: 1, height: 1 },
+    textShadowRadius: 2,
+  },
+  
   // Sliding panel - matching profile.tsx exactly
   scrollablePanel: {
     position: "absolute",
@@ -684,94 +1014,49 @@ const styles = StyleSheet.create({
     borderTopRightRadius: 25,
     shadowColor: "#000",
     shadowOffset: { width: 0, height: -5 },
-    shadowOpacity: 0.3,
-    shadowRadius: 10,
-    elevation: 10,
+    shadowOpacity: 0.2,
+    shadowRadius: 15,
+    elevation: 15,
+    zIndex: 10,
   },
   panelHeader: {
-    paddingVertical: 20,
-    paddingHorizontal: 20,
-    borderTopLeftRadius: 25,
-    borderTopRightRadius: 25,
-  },
-  nameContainer: {
+    paddingVertical: 32.5, // Expanded by 35px (was 15, now 32.5 = 17.5px on each side)
     alignItems: "center",
-    marginBottom: 20,
+    flexDirection: "row",
+    justifyContent: "center",
   },
-  bandNameInPanel: {
-    fontSize: 28,
-    fontFamily: "Amiko-Bold",
+  panelHeaderContent: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "flex-end", // Push content to the right
+    width: "100%",
+    paddingRight: 10, // 5-10px back from edge
+  },
+  rightBandInfo: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginTop: -10, // Move band name and music icon up 10px
+  },
+  nameTextInside: {
+    fontSize: 24,
+    fontFamily: "Audiowide-Regular",
     color: "#fff",
-    textAlign: "center",
-    marginBottom: 8,
+    textAlign: "right",
+    marginRight: 8, // Space between name and music icon
   },
-  swipeDownText: {
-    fontSize: 12,
-    color: "rgba(255, 255, 255, 0.7)",
-    fontFamily: "Amiko-Regular",
-    textTransform: "lowercase",
+  musicIcon: {
+    fontSize: 20,
+    color: "#fff",
   },
   swipeDownIndicator: {
     fontSize: 16,
     color: "rgba(255, 255, 255, 0.7)",
     fontWeight: "bold",
-    marginTop: 4,
+    position: "absolute",
+    left: 20, // Move to left side since content is now on right
   },
   
-  // Swipe up handle
-  swipeUpHandle: {
-    position: "absolute",
-    bottom: 30,
-    left: 0,
-    right: 0,
-    alignItems: "center",
-    paddingHorizontal: 20,
-  },
-  handleBar: {
-    width: 50,
-    height: 5,
-    backgroundColor: "rgba(255, 255, 255, 0.8)",
-    borderRadius: 3,
-    marginBottom: 8,
-  },
-  swipeUpText: {
-    fontSize: 12,
-    color: "rgba(255, 255, 255, 0.7)",
-    fontFamily: "Amiko-Regular",
-    textTransform: "lowercase",
-    marginBottom: 4,
-  },
-  swipeUpIndicator: {
-    fontSize: 16,
-    color: "rgba(255, 255, 255, 0.7)",
-    fontWeight: "bold",
-  },
-  statsRow: {
-    flexDirection: "row",
-    justifyContent: "space-around",
-    alignItems: "center",
-  },
-  statItem: {
-    alignItems: "center",
-    flex: 1,
-  },
-  statNumber: {
-    color: "#fff",
-    fontSize: 24,
-    fontWeight: "bold",
-    marginBottom: 4,
-  },
-  statLabel: {
-    color: "#b8b8ff",
-    fontSize: 14,
-    textTransform: "lowercase",
-  },
-  statDivider: {
-    width: 1,
-    height: 40,
-    backgroundColor: "rgba(255, 255, 255, 0.3)",
-    marginHorizontal: 10,
-  },
+  // Tabs - matching profile.tsx exactly
   tabsContainer: {
     flex: 1,
   },
@@ -813,6 +1098,114 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: "#f0f0f0",
   },
+  tabContentText: {
+    fontSize: 16,
+    fontFamily: "Amiko-Regular",
+    color: "#666",
+    textAlign: "center",
+    fontStyle: "italic",
+  },
+  
+  // Song components - matching profile.tsx exactly
+  songsList: {
+    maxHeight: 300,
+    marginBottom: 10,
+  },
+  addButton: {
+    backgroundColor: '#ff00ff',
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    borderRadius: 8,
+    alignItems: 'center',
+    marginBottom: 15,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  addButtonText: {
+    fontSize: 16,
+    fontFamily: 'Amiko-Regular',
+    color: '#fff',
+    fontWeight: '600',
+  },
+  noSongsText: {
+    fontSize: 16,
+    fontFamily: 'Amiko-Regular',
+    color: '#666',
+    textAlign: 'center',
+    fontStyle: 'italic',
+    paddingVertical: 20,
+  },
+  songItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 12,
+    paddingHorizontal: 15,
+    backgroundColor: '#fff',
+    marginBottom: 8,
+    borderRadius: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  songInfo: {
+    flex: 1,
+    marginRight: 10,
+  },
+  songTitle: {
+    fontSize: 16,
+    fontFamily: 'Amiko-Regular',
+    color: '#333',
+    fontWeight: '500',
+    marginBottom: 2,
+  },
+  songPrice: {
+    fontSize: 14,
+    fontFamily: 'Amiko-Regular',
+    color: '#ff00ff',
+    fontWeight: '600',
+  },
+  playButton: {
+    backgroundColor: '#ff00ff',
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  playButtonText: {
+    fontSize: 16,
+    color: '#fff',
+  },
+  pendingSongItem: {
+    backgroundColor: '#fff3cd',
+    borderLeftWidth: 4,
+    borderLeftColor: '#ffc107',
+  },
+  songTitleContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  pendingLabel: {
+    fontSize: 10,
+    fontFamily: 'Amiko-Regular',
+    color: '#856404',
+    backgroundColor: '#fff3cd',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+    fontWeight: '600',
+    borderWidth: 1,
+    borderColor: '#ffeaa7',
+  },
+  
+  // Band-specific styles
   memberItem: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -839,43 +1232,92 @@ const styles = StyleSheet.create({
     color: '#666',
     marginTop: 2,
   },
-  songItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: '#f0f0f0',
-  },
-  songImage: {
-    width: 60,
-    height: 60,
-    borderRadius: 8,
-    marginRight: 15,
-  },
-  songInfo: {
-    flex: 1,
-  },
-  songTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#333',
-  },
-  songPrice: {
-    fontSize: 14,
-    color: '#2a2882',
-    marginTop: 2,
-  },
   infoText: {
     fontSize: 14,
     color: '#333',
     marginBottom: 8,
     lineHeight: 20,
   },
-  placeholderText: {
-    fontSize: 14,
-    color: '#666',
-    fontStyle: 'italic',
-    textAlign: 'center',
+  
+  // Action buttons - matching profile.tsx exactly
+  actionButtons: {
+    padding: 20,
+    gap: 15,
+  },
+  actionButton: {
+    marginBottom: 10,
+  },
+  actionButtonGradient: {
+    paddingVertical: 15,
+    paddingHorizontal: 20,
+    borderRadius: 12,
+    alignItems: "center",
+  },
+  actionButtonText: {
+    fontSize: 18,
+    fontFamily: "Amiko-Regular",
+    color: "#fff",
+    fontWeight: "600",
+  },
+  signOutButton: {
+    paddingVertical: 15,
+    paddingHorizontal: 20,
+    borderRadius: 12,
+    borderWidth: 2,
+    borderColor: "#ff00ff",
+    alignItems: "center",
+    marginTop: 10,
+  },
+  signOutText: {
+    fontSize: 18,
+    fontFamily: "Amiko-Regular",
+    color: "#ff00ff",
+    fontWeight: "600",
+  },
+  
+  // Full-screen image modal styles - matching profile.tsx exactly
+  modalContainer: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.95)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalCloseArea: {
+    flex: 1,
+    width: '100%',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalImageContainer: {
+    flex: 1,
+    width: '100%',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+  },
+  modalImage: {
+    width: '100%',
+    height: '80%',
+    maxWidth: SCREEN_WIDTH - 40,
+  },
+  backButton: {
+    position: 'absolute',
+    top: 60,
+    left: 20,
+    zIndex: 1000,
+  },
+  backButtonGradient: {
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderRadius: 25,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  backButtonText: {
+    fontSize: 18,
+    fontFamily: 'Amiko-Regular',
+    color: '#fff',
+    fontWeight: '600',
   },
 });
 

@@ -15,6 +15,7 @@ import {
 import { useNavigation } from '@react-navigation/native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { supabase } from '../lib/supabase';
+import { notificationService } from '../services/notificationService';
 
 interface Artist {
   artist_id: string;
@@ -225,6 +226,22 @@ const Create = () => {
       }
         
       console.log('✅ Band created successfully:', data);
+      
+      // Send band invitations to all members
+      console.log('📧 Sending band invitations...');
+      const invitationResult = await notificationService.sendBandInvitations(
+        currentArtist.artist_id,
+        currentArtist.artist_name,
+        data.band_id,
+        bandName.trim(),
+        selectedMembers
+      );
+      
+      if (invitationResult.success) {
+        console.log('✅ All invitations sent successfully');
+      } else {
+        console.warn('⚠️ Some invitations failed to send:', invitationResult.error);
+      }
       
       Alert.alert(
         'Band Created!', 

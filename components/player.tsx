@@ -171,7 +171,11 @@ export const MusicPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
           shouldCorrectPitch: true,
         },
         (status) => {
-          console.log('Audio status update:', status);
+          // Only log important status changes, not every progress update
+          if (status.didJustFinish || !status.isLoaded || 
+              (playbackStatusRef.current?.isPlaying !== status.isPlaying)) {
+            console.log('Audio status update:', status);
+          }
           playbackStatusRef.current = status;
           
           if (status.isLoaded) {
@@ -485,23 +489,37 @@ const Player = () => {
     const fetchArtistName = async () => {
       if (currentSong?.artist_id) {
         try {
-          const { data, error } = await supabase
-            .from('artists')
-            .select('artist_name')
-            .eq('artist_id', currentSong.artist_id)
-            .single();
+          // Check if this is a band song
+          if (currentSong.song_type === 'band' && currentSong.band_id) {
+            // Fetch band name for band songs
+            const { data, error } = await supabase
+              .from('bands')
+              .select('band_name')
+              .eq('band_id', currentSong.band_id)
+              .single();
 
-          if (error) throw error;
-          setArtistName(data?.artist_name || 'Unknown Artist');
+            if (error) throw error;
+            setArtistName(data?.band_name || 'Unknown Band');
+          } else {
+            // Fetch artist name for individual artist songs
+            const { data, error } = await supabase
+              .from('artists')
+              .select('artist_name')
+              .eq('artist_id', currentSong.artist_id)
+              .single();
+
+            if (error) throw error;
+            setArtistName(data?.artist_name || 'Unknown Artist');
+          }
         } catch (error) {
-          console.error('Error fetching artist name:', error);
-          setArtistName('Unknown Artist');
+          console.error('Error fetching artist/band name:', error);
+          setArtistName(currentSong.song_type === 'band' ? 'Unknown Band' : 'Unknown Artist');
         }
       }
     };
 
     fetchArtistName();
-  }, [currentSong?.artist_id]);
+  }, [currentSong?.artist_id, currentSong?.song_type, currentSong?.band_id]);
 
   // Update progress animation
   useEffect(() => {

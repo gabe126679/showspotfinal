@@ -3,7 +3,10 @@
     "allow": [
       "Bash(npx expo:*)",
       "Bash(touch:*)",
-      "Bash(tail:*)"
+      "Bash(tail:*)",
+      "Bash(git checkout:*)",
+      "Bash(rm:*)",
+      "Bash(cat:*)"
     ],
     "deny": []
   }

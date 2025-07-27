@@ -17,11 +17,14 @@ import { LinearGradient } from "expo-linear-gradient";
 import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
 import { supabase } from "../lib/supabase";
+import { notificationService } from '../services/notificationService';
 
 interface SongUploadFormProps {
   visible: boolean;
   onClose: () => void;
   artistData: any;
+  bandData?: any;
+  bandId?: string;
 }
 
 const PRICE_SUGGESTIONS = [
@@ -35,6 +38,8 @@ const SongUploadForm: React.FC<SongUploadFormProps> = ({
   visible,
   onClose,
   artistData,
+  bandData,
+  bandId,
 }) => {
   const [songTitle, setSongTitle] = useState("");
   const [songPrice, setSongPrice] = useState("");
@@ -142,7 +147,7 @@ const SongUploadForm: React.FC<SongUploadFormProps> = ({
       }
 
       const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        mediaTypes: ImagePicker.MediaTypeOptions.images,
         allowsEditing: true,
         aspect: [1, 1],
         quality: 0.8,
@@ -193,17 +198,44 @@ const SongUploadForm: React.FC<SongUploadFormProps> = ({
       console.log('Original file:', {
         name: file.name,
         size: file.size,
-        type: file.mimeType,
+        type: file.type || file.mimeType,
         uri: file.uri
       });
 
-      const fileExt = file.name.split('.').pop()?.toLowerCase();
+      // Determine file extension
+      let fileExt: string;
+      if (file.name) {
+        // DocumentPicker file has name
+        fileExt = file.name.split('.').pop()?.toLowerCase() || '';
+      } else if (file.uri) {
+        // ImagePicker file - extract extension from URI
+        const uriParts = file.uri.split('.');
+        fileExt = uriParts[uriParts.length - 1]?.toLowerCase() || '';
+        
+        // Sometimes ImagePicker URIs end with .png, .jpg, etc.
+        if (!fileExt || fileExt.length > 4) {
+          // If no clear extension, use type to determine
+          if (file.type?.includes('png')) fileExt = 'png';
+          else if (file.type?.includes('jpeg') || file.type?.includes('jpg')) fileExt = 'jpg';
+          else fileExt = 'png'; // default for images
+        }
+      } else {
+        throw new Error('Invalid file: no name or URI found');
+      }
+      
       console.log('File extension:', fileExt);
       
-      // Validate audio file
-      const validExtensions = ['mp3', 'wav', 'm4a', 'aac'];
-      if (!validExtensions.includes(fileExt)) {
-        throw new Error(`Invalid file type: ${fileExt}. Please use MP3, WAV, M4A, or AAC.`);
+      // Validate file type based on bucket
+      if (bucket === 'songs') {
+        const validAudioExtensions = ['mp3', 'wav', 'm4a', 'aac'];
+        if (!validAudioExtensions.includes(fileExt)) {
+          throw new Error(`Invalid audio file type: ${fileExt}. Please use MP3, WAV, M4A, or AAC.`);
+        }
+      } else if (bucket === 'song-images') {
+        const validImageExtensions = ['jpg', 'jpeg', 'png', 'gif', 'webp'];
+        if (!validImageExtensions.includes(fileExt)) {
+          throw new Error(`Invalid image file type: ${fileExt}. Please use JPG, PNG, GIF, or WEBP.`);
+        }
       }
       
       const fileName = `${Date.now()}.${fileExt}`;
@@ -215,10 +247,16 @@ const SongUploadForm: React.FC<SongUploadFormProps> = ({
       console.log('Using optimized React Native upload...');
       
       // Create a proper file object for React Native
+      // Fix incomplete MIME types (e.g., "image" -> "image/png")
+      let mimeType = file.type || file.mimeType;
+      if (mimeType === 'image' || !mimeType?.includes('/')) {
+        mimeType = bucket === 'songs' ? `audio/${fileExt}` : `image/${fileExt}`;
+      }
+      
       const fileObject = {
         uri: file.uri,
-        name: file.name,
-        type: file.mimeType || `audio/${fileExt}`,
+        name: file.name || fileName,
+        type: mimeType,
       };
 
       console.log('File object for upload:', fileObject);
@@ -229,7 +267,7 @@ const SongUploadForm: React.FC<SongUploadFormProps> = ({
         .upload(filePath, fileObject, {
           cacheControl: '3600',
           upsert: false,
-          contentType: file.mimeType || `audio/${fileExt}`,
+          contentType: fileObject.type,
         });
 
       if (error) {
@@ -266,8 +304,8 @@ const SongUploadForm: React.FC<SongUploadFormProps> = ({
         userId // Use spotter_id as folder name
       );
 
-      // Upload song image or use artist profile image
-      let songImagePath = artistData?.artist_profile_image || null;
+      // Upload song image or use artist/band profile image
+      let songImagePath = artistData?.artist_profile_image || bandData?.band_profile_picture || null;
       if (songImage) {
         songImagePath = await uploadFileToSupabase(
           songImage,
@@ -276,30 +314,99 @@ const SongUploadForm: React.FC<SongUploadFormProps> = ({
         );
       }
 
-      // Save song data to database with snake_case column names
-      const { error: dbError } = await supabase
+      // Get current user's artist_id for band uploads
+      let uploaderArtistId = artistData?.artist_id;
+      if (bandId && !uploaderArtistId) {
+        const { data: userArtist } = await supabase
+          .from('artists')
+          .select('artist_id')
+          .eq('spotter_id', userId)
+          .single();
+        uploaderArtistId = userArtist?.artist_id;
+      }
+
+      // Prepare song data
+      const songData: any = {
+        spotter_id: userId,                    // Required: uploader's spotter_id
+        artist_id: uploaderArtistId,           // Required: artist_id from artists table
+        song_title: songTitle.trim(),          // Required: song title
+        song_price: songPrice,                 // Required: price as string
+        song_image: songImagePath,             // Optional: song cover image
+        song_file: songFilePath,               // Required: actual song file path
+        song_status: 'active',                 // Default to 'active'
+        uploader_id: uploaderArtistId,         // Track who uploaded the song
+      };
+
+      // Handle band vs artist uploads differently
+      if (bandId && bandData) {
+        // Band upload - requires consensus
+        songData.song_type = 'band';
+        songData.band_id = bandId;
+        songData.song_approved = false; // Requires approval
+        songData.song_status = 'pending'; // Keep pending until all approve
+        
+        // Create consensus array for all band members
+        const consensus = bandData.band_members.map((memberId: string) => ({
+          member: memberId,
+          accepted: memberId === uploaderArtistId // Uploader auto-approves
+        }));
+        songData.song_consensus = consensus;
+      } else {
+        // Artist upload - no consensus needed
+        songData.song_type = 'artist';
+        songData.song_approved = true;
+        songData.song_consensus = true;
+      }
+
+      // Save song data to database
+      const { data: insertedSong, error: dbError } = await supabase
         .from("songs")
-        .insert({
-          spotter_id: userId,                    // Required: uploader's spotter_id
-          artist_id: artistData.artist_id,        // Required: artist_id from artists table
-          song_type: 'artist',                   // Default to 'artist' type
-          song_title: songTitle.trim(),          // Required: song title
-          song_price: songPrice,                 // Required: price as string
-          song_image: songImagePath,             // Optional: song cover image
-          song_file: songFilePath,               // Required: actual song file path
-          song_status: 'active',                 // Default to 'active'
-          song_consensus: true,                  // Default to true for artist songs
-          // created_at is auto-generated
-        });
+        .insert(songData)
+        .select()
+        .single();
 
       if (dbError) {
         console.error("Database error:", dbError);
         throw dbError;
       }
 
+      // Send notifications for band songs
+      if (bandId && bandData && insertedSong) {
+        try {
+          // Get uploader's artist name
+          const { data: uploaderArtist } = await supabase
+            .from('artists') 
+            .select('artist_name')
+            .eq('artist_id', uploaderArtistId)
+            .single();
+
+          const uploaderName = uploaderArtist?.artist_name || 'A band member';
+
+          // Send song request notifications to all other band members
+          await notificationService.sendSongRequestNotifications(
+            uploaderArtistId,
+            uploaderName,
+            insertedSong.song_id,
+            songTitle.trim(),
+            bandId,
+            bandData.band_name,
+            bandData.band_members,
+            songFilePath,
+            songImagePath
+          );
+
+          console.log('✅ Song request notifications sent successfully');
+        } catch (notificationError) {
+          console.error('Failed to send notifications:', notificationError);
+          // Don't fail the upload if notifications fail
+        }
+      }
+
       Alert.alert(
-        "Success",
-        "Song uploaded successfully!",
+        "Success", 
+        bandId 
+          ? "Song uploaded! Other band members will be notified to approve it." 
+          : "Song uploaded successfully!",
         [
           {
             text: "OK",
@@ -343,7 +450,9 @@ const SongUploadForm: React.FC<SongUploadFormProps> = ({
           <TouchableOpacity onPress={handleClose} style={styles.closeButton}>
             <Text style={styles.closeButtonText}>✕</Text>
           </TouchableOpacity>
-          <Text style={styles.headerTitle}>Upload Song</Text>
+          <Text style={styles.headerTitle}>
+            {bandId ? `Upload Song to ${bandData?.band_name || 'Band'}` : 'Upload Song'}
+          </Text>
           <View style={styles.closeButton} />
         </LinearGradient>
 

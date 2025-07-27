@@ -54,7 +54,8 @@ export default function Picture({ navigation }: Props) {
             const result = await ImagePicker.launchImageLibraryAsync({
                 mediaTypes: ['images'] as unknown as ImagePicker.MediaTypeOptions, // Type assertion with unknown
                 allowsEditing: true,
-                quality: 1,
+                aspect: [393, 682], // iPhone 16 profile display aspect ratio
+                quality: 0.8, // Reduced quality for better performance
             });
 
             console.log('Image Picker Result:', result);

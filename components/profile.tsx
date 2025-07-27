@@ -13,6 +13,7 @@ import {
   StatusBar,
   Platform,
   Vibration,
+  Modal,
 } from "react-native";
 import { PanGestureHandler, State } from 'react-native-gesture-handler';
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -35,7 +36,8 @@ const HANDLE_HEIGHT = 30;
 const TAB_HEIGHT = 80;
 const COLLAPSED_HEIGHT = 150; // Reduced to eliminate gap
 const COLLAPSED_TRANSLATE_Y = SCREEN_HEIGHT - COLLAPSED_HEIGHT - FOOTER_HEIGHT;
-const IMAGE_SECTION_HEIGHT = SCREEN_HEIGHT - HEADER_HEIGHT - FOOTER_HEIGHT;
+// Optimized height for iPhone 16 - removes white gap
+const IMAGE_SECTION_HEIGHT = 610; // Further increased to eliminate white space
 
 type ProfileType = 'spotter' | 'artist' | 'venue';
 
@@ -105,6 +107,16 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState(false);
+  
+  // Full-screen image modal
+  const [showImageModal, setShowImageModal] = useState(false);
+  const [selectedImage, setSelectedImage] = useState<string | null>(null);
+  
+  // Handle image press for full-screen view
+  const handleImagePress = (imageUri: string) => {
+    setSelectedImage(imageUri);
+    setShowImageModal(true);
+  };
   
   // Spotter data
   const [spotterName, setSpotterName] = useState("");
@@ -567,7 +579,11 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
   const currentData = getCurrentProfileData();
 
   return (
-    <SafeAreaView style={styles.container}>
+    <View style={styles.container}>
+      <LinearGradient
+        colors={["rgba(255, 0, 255, 0.8)", "rgba(42, 40, 130, 0.8)"]}
+        style={StyleSheet.absoluteFillObject}
+      />
       <StatusBar barStyle="light-content" backgroundColor="#2a2882" />
       
       {/* Header with profile type navigation - Modern Card Style */}
@@ -640,20 +656,23 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
               showsHorizontalScrollIndicator={false}
             >
               {currentData.images.map((item, index) => (
-                <Image 
-                  key={`profile-image-${index}-${item?.substring(item.length - 10) || index}`}
-                  source={{ uri: item }} 
-                  style={styles.profileImage}
-                  resizeMode="cover"
-                />
+                <TouchableOpacity key={`profile-image-${index}-${item?.substring(item.length - 10) || index}`} onPress={() => handleImagePress(item)}>
+                  <Image 
+                    source={{ uri: item }} 
+                    style={styles.profileImage}
+                    resizeMode="cover"
+                  />
+                </TouchableOpacity>
               ))}
             </ScrollView>
           ) : (
-            <Image 
-              source={{ uri: currentData.images[0] }} 
-              style={styles.profileImage}
-              resizeMode="cover"
-            />
+            <TouchableOpacity onPress={() => handleImagePress(currentData.images[0])}>
+              <Image 
+                source={{ uri: currentData.images[0] }} 
+                style={styles.profileImage}
+                resizeMode="cover"
+              />
+            </TouchableOpacity>
           )
         ) : (
           <LinearGradient
@@ -664,36 +683,46 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
           </LinearGradient>
         )}
         
-        {/* Floating Stats Card */}
+        {/* Name and Rating Overlay */}
         <Animated.View 
-          style={[styles.floatingStatsCard, { opacity: nameOpacity }]} 
+          style={[styles.nameRatingOverlay, { opacity: nameOpacity }]} 
           pointerEvents="none"
         >
-          <LinearGradient
-            colors={activeProfile === 'venue' 
-              ? ["rgba(80, 200, 120, 0.9)", "rgba(255, 215, 0, 0.9)"] 
-              : ["rgba(42, 40, 130, 0.9)", "rgba(255, 0, 255, 0.9)"]
-            }
-            style={styles.statsGradient}
-          >
-            <View style={styles.statsRow}>
-              <View style={styles.statItem}>
-                <Text style={styles.statNumber}>{currentData.tabs.length}</Text>
-                <Text style={styles.statLabel}>Categories</Text>
-              </View>
-              <View style={styles.statDivider} />
-              <View style={styles.statItem}>
-                <Text style={styles.statNumber}>
-                  {activeProfile === 'artist' ? (songs.length || 0) : 
-                   activeProfile === 'venue' ? '5+' : '12'}
-                </Text>
-                <Text style={styles.statLabel}>
-                  {activeProfile === 'artist' ? 'Songs' : 
-                   activeProfile === 'venue' ? 'Events' : 'Playlists'}
-                </Text>
-              </View>
+          {/* Name on bottom left */}
+          <View style={styles.nameContainer}>
+            <LinearGradient
+              colors={["rgba(0, 0, 0, 0.8)", "rgba(0, 0, 0, 0.4)"]}
+              style={styles.nameBackground}
+            >
+              <Text style={styles.profileNameText} numberOfLines={1}>
+                {currentData.name}
+              </Text>
+            </LinearGradient>
+          </View>
+          
+          {/* Rating on bottom right - only for artists and venues */}
+          {(activeProfile === 'artist' || activeProfile === 'venue') && (
+            <View style={styles.ratingContainer}>
+              <LinearGradient
+                colors={["rgba(0, 0, 0, 0.8)", "rgba(0, 0, 0, 0.4)"]}
+                style={styles.ratingBackground}
+              >
+                <View style={styles.starsRow}>
+                  {[1, 2, 3, 4, 5].map((star) => (
+                    <Image
+                      key={star}
+                      source={require('../assets/star.png')}
+                      style={[
+                        styles.starIcon,
+                        star <= 4 ? styles.filledStar : styles.emptyStar
+                      ]}
+                    />
+                  ))}
+                </View>
+                <Text style={styles.ratingText}>4.0</Text>
+              </LinearGradient>
             </View>
-          </LinearGradient>
+          )}
         </Animated.View>
       </Animated.View>
 
@@ -870,6 +899,19 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
               <>
                 <TouchableOpacity style={styles.actionButton}>
                   <LinearGradient
+                    colors={["#32CD32", "#50C878"]}
+                    style={styles.actionButtonGradient}
+                  >
+                    <TouchableOpacity onPress={() => navigation.navigate('ArtistPublicProfile' as never, { artist_id: artistData?.artist_id })}>
+                      <Text style={styles.actionButtonText}>
+                        View Public Profile
+                      </Text>
+                    </TouchableOpacity>
+                  </LinearGradient>
+                </TouchableOpacity>
+                
+                <TouchableOpacity style={styles.actionButton}>
+                  <LinearGradient
                     colors={["#ff00ff", "#2a2882"]}
                     style={styles.actionButtonGradient}
                   >
@@ -900,6 +942,19 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
               </>
             ) : (
               <>
+                <TouchableOpacity style={styles.actionButton}>
+                  <LinearGradient
+                    colors={["#87CEEB", "#4682B4"]}
+                    style={styles.actionButtonGradient}
+                  >
+                    <TouchableOpacity onPress={() => navigation.navigate('VenuePublicProfile' as never, { venue_id: venueData?.venue_id })}>
+                      <Text style={styles.actionButtonText}>
+                        View Public Profile
+                      </Text>
+                    </TouchableOpacity>
+                  </LinearGradient>
+                </TouchableOpacity>
+                
                 <TouchableOpacity style={styles.actionButton}>
                   <LinearGradient
                     colors={["#FFD700", "#50C878"]}
@@ -936,6 +991,44 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
       </Animated.View>
 
 
+      {/* Full-Screen Image Modal */}
+      <Modal
+        visible={showImageModal}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setShowImageModal(false)}
+        statusBarTranslucent={true}
+      >
+        <View style={styles.modalContainer}>
+          <TouchableOpacity 
+            style={styles.modalCloseArea}
+            onPress={() => setShowImageModal(false)}
+            activeOpacity={1}
+          >
+            <View style={styles.modalImageContainer}>
+              {selectedImage && (
+                <Image
+                  source={{ uri: selectedImage }}
+                  style={styles.modalImage}
+                  resizeMode="contain"
+                />
+              )}
+            </View>
+            <TouchableOpacity 
+              style={styles.backButton}
+              onPress={() => setShowImageModal(false)}
+            >
+              <LinearGradient
+                colors={["rgba(0, 0, 0, 0.8)", "rgba(0, 0, 0, 0.6)"]}
+                style={styles.backButtonGradient}
+              >
+                <Text style={styles.backButtonText}>← Back</Text>
+              </LinearGradient>
+            </TouchableOpacity>
+          </TouchableOpacity>
+        </View>
+      </Modal>
+
       {/* Song Upload Form Modal */}
       <SongUploadForm
         visible={showSongUploadForm}
@@ -947,7 +1040,7 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
         artistData={activeProfile === 'artist' ? artistData : venueData}
       />
       
-    </SafeAreaView>
+    </View>
   );
 };
 
@@ -956,7 +1049,11 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: "#fff",
     justifyContent: "flex-start",
-    paddingBottom: 85, // Just account for bottom tab bar now
+    // Removed paddingBottom - TabNavigator handles footer spacing
+  },
+  containerBackground: {
+    flex: 1,
+    backgroundColor: 'rgba(255, 0, 255, 0.8)', // Brand gradient background fallback
   },
   
   // Loading states
@@ -1010,9 +1107,15 @@ const styles = StyleSheet.create({
   
   // Modern Header
   modernHeader: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
     paddingHorizontal: 15,
-    paddingTop: 15,
+    paddingTop: 50,
     paddingBottom: 10,
+    zIndex: 20, // Above image section
+    backgroundColor: 'transparent',
   },
   headerCard: {
     borderRadius: 20,
@@ -1092,12 +1195,14 @@ const styles = StyleSheet.create({
   // Image section
   imageSection: {
     height: IMAGE_SECTION_HEIGHT,
-    width: "100%",
+    width: SCREEN_WIDTH, // Explicit width instead of percentage
     position: "relative",
     backgroundColor: "#000",
+    overflow: 'hidden', // Ensure no content exceeds boundaries
+    marginTop: 110, // Push image section down 80px total
   },
   profileImage: {
-    width: SCREEN_WIDTH,
+    width: SCREEN_WIDTH, // Must match screen width for proper ScrollView pagination
     height: IMAGE_SECTION_HEIGHT,
   },
   imagePlaceholder: {
@@ -1136,53 +1241,78 @@ const styles = StyleSheet.create({
     textShadowRadius: 3,
   },
   
-  // Floating Stats Card
-  floatingStatsCard: {
+  // Name and Rating Overlay
+  nameRatingOverlay: {
     position: "absolute",
-    bottom: 30,
-    left: 20,
-    right: 20,
+    bottom: 0,
+    left: 0,
+    right: 0,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-end',
+    padding: 15,
     zIndex: 6,
   },
-  statsGradient: {
-    borderRadius: 20,
-    padding: 20,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.3,
-    shadowRadius: 15,
-    elevation: 15,
-  },
-  statsRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-around',
-  },
-  statItem: {
-    alignItems: 'center',
+  nameContainer: {
     flex: 1,
+    marginRight: 15,
   },
-  statNumber: {
-    fontSize: 28,
-    fontWeight: '800',
+  nameBackground: {
+    paddingHorizontal: 15,
+    paddingVertical: 10,
+    borderRadius: 15,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 8,
+  },
+  profileNameText: {
+    fontSize: 22,
+    fontFamily: "Audiowide-Regular",
     color: '#ffffff',
-    textShadowColor: 'rgba(0, 0, 0, 0.3)',
+    fontWeight: '700',
+    textShadowColor: 'rgba(0, 0, 0, 0.5)',
+    textShadowOffset: { width: 1, height: 1 },
+    textShadowRadius: 3,
+  },
+  ratingContainer: {
+    alignItems: 'flex-end',
+  },
+  ratingBackground: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 15,
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 8,
+  },
+  starsRow: {
+    flexDirection: 'row',
+    marginBottom: 4,
+  },
+  starIcon: {
+    width: 16,
+    height: 16,
+    marginHorizontal: 1,
+  },
+  filledStar: {
+    tintColor: '#FFD700', // Gold color for filled stars
+  },
+  emptyStar: {
+    tintColor: 'rgba(255, 255, 255, 0.3)', // Semi-transparent for empty stars
+  },
+  ratingText: {
+    fontSize: 14,
+    fontFamily: "Amiko-Regular",
+    color: '#ffffff',
+    fontWeight: '600',
+    textShadowColor: 'rgba(0, 0, 0, 0.5)',
     textShadowOffset: { width: 1, height: 1 },
     textShadowRadius: 2,
-  },
-  statLabel: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: 'rgba(255, 255, 255, 0.9)',
-    textTransform: 'uppercase',
-    letterSpacing: 1,
-    marginTop: 4,
-  },
-  statDivider: {
-    width: 1,
-    height: 40,
-    backgroundColor: 'rgba(255, 255, 255, 0.3)',
-    marginHorizontal: 20,
   },
   
   // Sliding panel
@@ -1433,6 +1563,51 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontFamily: 'Amiko-Regular',
     color: '#ff00ff',
+    fontWeight: '600',
+  },
+  
+  // Full-screen image modal styles
+  modalContainer: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.95)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalCloseArea: {
+    flex: 1,
+    width: '100%',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalImageContainer: {
+    flex: 1,
+    width: '100%',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+  },
+  modalImage: {
+    width: '100%',
+    height: '80%',
+    maxWidth: SCREEN_WIDTH - 40,
+  },
+  backButton: {
+    position: 'absolute',
+    top: 60,
+    left: 20,
+    zIndex: 1000,
+  },
+  backButtonGradient: {
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderRadius: 25,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  backButtonText: {
+    fontSize: 18,
+    fontFamily: 'Amiko-Regular',
+    color: '#fff',
     fontWeight: '600',
   },
 });

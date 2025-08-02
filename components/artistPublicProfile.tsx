@@ -23,6 +23,7 @@ import { supabase } from "../lib/supabase";
 import { LinearGradient } from "expo-linear-gradient";
 import { useMusicPlayer } from "./player";
 import ShowSpotHeader from "./ShowSpotHeader";
+import SongPurchaseModal from "./SongPurchaseModal";
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get("window");
 // iPhone 16 specific dimensions for gesture positioning - matching profile.tsx exactly
@@ -112,10 +113,39 @@ const ArtistPublicProfile: React.FC<ArtistPublicProfileProps> = ({ route }) => {
   const [showImageModal, setShowImageModal] = useState(false);
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
   
+  // Song purchase modal
+  const [showSongModal, setShowSongModal] = useState(false);
+  const [selectedSong, setSelectedSong] = useState<any>(null);
+  
   // Handle image press for full-screen view
   const handleImagePress = (imageUri: string) => {
     setSelectedImage(imageUri);
     setShowImageModal(true);
+  };
+
+  // Handle song purchase
+  const handleSongPurchase = (song: Song) => {
+    console.log('handleSongPurchase called with song:', song);
+    
+    if (!song || !artistData) {
+      console.error('Song or artist data is null or undefined');
+      return;
+    }
+    
+    const songDataForModal = {
+      song_id: song.song_id,
+      song_title: song.song_title,
+      song_image: song.song_image,
+      song_file: song.song_file,
+      song_price: song.song_price,
+      song_type: 'artist' as const,
+      song_artist: song.artist_id,
+      artist_name: artistData.artist_name,
+    };
+    
+    console.log('Setting songData for modal:', songDataForModal);
+    setSelectedSong(songDataForModal);
+    setShowSongModal(true);
   };
 
   // Tabs state
@@ -373,7 +403,15 @@ const ArtistPublicProfile: React.FC<ArtistPublicProfileProps> = ({ route }) => {
         <Text style={styles.songTitle} numberOfLines={1}>
           {song.song_title}
         </Text>
-        <Text style={styles.songPrice}>${song.song_price}</Text>
+        <View style={styles.songPriceSection}>
+          <Text style={styles.songPrice}>${song.song_price}</Text>
+          <TouchableOpacity
+            style={styles.songPurchaseButton}
+            onPress={() => handleSongPurchase(song)}
+          >
+            <Text style={styles.songPurchaseButtonText}>+</Text>
+          </TouchableOpacity>
+        </View>
       </View>
       <TouchableOpacity
         style={styles.playButton}
@@ -678,6 +716,17 @@ const ArtistPublicProfile: React.FC<ArtistPublicProfileProps> = ({ route }) => {
           </TouchableOpacity>
         </View>
       </Modal>
+
+      {/* Song Purchase Modal */}
+      <SongPurchaseModal
+        visible={showSongModal}
+        onClose={() => setShowSongModal(false)}
+        songData={selectedSong}
+        onPurchaseSuccess={() => {
+          // Refresh after purchase
+          console.log('Song purchased successfully');
+        }}
+      />
     </View>
   );
 };
@@ -876,11 +925,36 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     marginBottom: 2,
   },
+  songPriceSection: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
   songPrice: {
     fontSize: 14,
     fontFamily: 'Amiko-Regular',
     color: '#ff00ff',
     fontWeight: '600',
+  },
+  songPurchaseButton: {
+    backgroundColor: '#ff00ff',
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginLeft: 10,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.2,
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  songPurchaseButtonText: {
+    fontSize: 14,
+    color: '#fff',
+    fontWeight: 'bold',
+    lineHeight: 14,
   },
   playButton: {
     backgroundColor: '#ff00ff',

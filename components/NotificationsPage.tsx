@@ -12,6 +12,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
+import { useNavigation } from '@react-navigation/native';
 import { supabase } from '../lib/supabase';
 import { notificationService } from '../services/notificationService';
 import { useMusicPlayer } from './player';
@@ -37,6 +38,7 @@ interface NotificationsPageProps {
 }
 
 const NotificationsPage: React.FC<NotificationsPageProps> = ({ onClose }) => {
+  const navigation = useNavigation();
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -647,6 +649,406 @@ const NotificationsPage: React.FC<NotificationsPageProps> = ({ onClose }) => {
     }
   };
 
+  // Handle artist show invitation accept
+  const handleArtistShowInvitationAccept = async (notification: Notification) => {
+    try {
+      if (!notification.notification_data?.show_id) {
+        Alert.alert('Error', 'Invalid show invitation');
+        return;
+      }
+
+      setLoading(true);
+
+      // Get the show data
+      const { data: showData, error: showError } = await supabase
+        .from('shows')
+        .select('*')
+        .eq('show_id', notification.notification_data.show_id)
+        .single();
+
+      if (showError || !showData) {
+        Alert.alert('Error', 'Could not find show information');
+        return;
+      }
+
+      // Update show_members to accept
+      const updatedMembers = showData.show_members.map((member: any) => {
+        if (member.show_member_id === notification.notification_recipient && member.show_member_type === 'artist') {
+          return { ...member, show_member_decision: true };
+        }
+        return member;
+      });
+
+      // Update the show
+      const { error: updateError } = await supabase
+        .from('shows')
+        .update({ show_members: updatedMembers })
+        .eq('show_id', notification.notification_data.show_id);
+
+      if (updateError) {
+        Alert.alert('Error', 'Could not update show status');
+        return;
+      }
+
+      // Mark notification as handled
+      await supabase
+        .from('notifications')
+        .update({ action_required: false, is_read: true })
+        .eq('notification_id', notification.notification_id);
+
+      // Get accepting artist's info
+      const { data: artistData } = await supabase
+        .from('artists')
+        .select('artist_name')
+        .eq('artist_id', notification.notification_recipient)
+        .single();
+
+      const acceptingArtistName = artistData?.artist_name || 'An artist';
+
+      // Send acceptance notifications to all other show participants
+      const recipientIds = new Set<string>();
+      
+      // Add promoter
+      recipientIds.add(showData.show_promoter);
+      
+      // Add venue spotter_id
+      const { data: venueData } = await supabase
+        .from('venues')
+        .select('spotter_id')
+        .eq('venue_id', showData.show_venue)
+        .single();
+      
+      if (venueData?.spotter_id) {
+        recipientIds.add(venueData.spotter_id);
+      }
+
+      // Add all other show members
+      for (const member of showData.show_members) {
+        if (member.show_member_type === 'artist' && member.show_member_id !== notification.notification_recipient) {
+          recipientIds.add(member.show_member_id);
+        } else if (member.show_member_type === 'band' && member.show_member_consensus) {
+          for (const bandMember of member.show_member_consensus) {
+            recipientIds.add(bandMember.show_band_member_id);
+          }
+        }
+      }
+
+      // Send notifications
+      for (const recipientId of recipientIds) {
+        await notificationService.createArtistShowAcceptanceNotification(
+          notification.notification_recipient,
+          acceptingArtistName,
+          recipientId,
+          showData.show_id,
+          {
+            venue_name: notification.notification_data.venue_name,
+            preferred_date: notification.notification_data.preferred_date,
+            preferred_time: notification.notification_data.preferred_time
+          }
+        );
+      }
+
+      // Check if show should be activated
+      const activationResult = await notificationService.checkAndActivateShow(notification.notification_data.show_id);
+      if (activationResult.activated) {
+        Alert.alert('Success', 'You have accepted the show invitation! The show is now ACTIVE!');
+      } else {
+        Alert.alert('Success', 'You have accepted the show invitation!');
+      }
+      fetchNotifications();
+    } catch (error) {
+      console.error('Error accepting show invitation:', error);
+      Alert.alert('Error', 'Could not accept invitation');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Handle artist show invitation reject
+  const handleArtistShowInvitationReject = async (notification: Notification) => {
+    try {
+      Alert.alert(
+        'Reject Invitation',
+        'Are you sure you want to reject this show invitation?',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Reject',
+            style: 'destructive',
+            onPress: async () => {
+              // Mark notification as handled
+              await supabase
+                .from('notifications')
+                .update({ action_required: false, is_read: true })
+                .eq('notification_id', notification.notification_id);
+
+              Alert.alert('Success', 'You have declined the show invitation');
+              fetchNotifications();
+            },
+          },
+        ]
+      );
+    } catch (error) {
+      console.error('Error rejecting show invitation:', error);
+      Alert.alert('Error', 'Could not reject invitation');
+    }
+  };
+
+  // Handle band member show invitation accept
+  const handleBandMemberShowInvitationAccept = async (notification: Notification) => {
+    try {
+      if (!notification.notification_data?.show_id) {
+        Alert.alert('Error', 'Invalid show invitation');
+        return;
+      }
+
+      setLoading(true);
+
+      // Get the show data
+      const { data: showData, error: showError } = await supabase
+        .from('shows')
+        .select('*')
+        .eq('show_id', notification.notification_data.show_id)
+        .single();
+
+      if (showError || !showData) {
+        Alert.alert('Error', 'Could not find show information');
+        return;
+      }
+
+      // Find and update the band member's consensus
+      let bandMemberIndex = -1;
+      let showMemberIndex = -1;
+      
+      console.log('🔍 DEBUG: Looking for notification recipient:', notification.notification_recipient);
+      console.log('🔍 DEBUG: Show members:', JSON.stringify(showData.show_members, null, 2));
+      
+      const updatedMembers = showData.show_members.map((member: any, idx: number) => {
+        if (member.show_member_type === 'band' && member.show_member_consensus) {
+          console.log(`🔍 DEBUG: Checking band ${member.show_member_name} consensus:`, member.show_member_consensus);
+          
+          const consensusIndex = member.show_member_consensus.findIndex(
+            (bm: any) => {
+              console.log(`🔍 DEBUG: Comparing ${bm.show_band_member_id} === ${notification.notification_recipient}`);
+              return bm.show_band_member_id === notification.notification_recipient;
+            }
+          );
+          
+          console.log(`🔍 DEBUG: Found consensus index: ${consensusIndex} for band ${member.show_member_name}`);
+          
+          if (consensusIndex !== -1) {
+            showMemberIndex = idx;
+            bandMemberIndex = consensusIndex;
+            
+            const updatedConsensus = [...member.show_member_consensus];
+            updatedConsensus[consensusIndex] = {
+              ...updatedConsensus[consensusIndex],
+              show_band_member_decision: true
+            };
+            
+            console.log('🔍 DEBUG: Updated consensus:', updatedConsensus);
+            
+            // Check if all band members have accepted
+            const allAccepted = updatedConsensus.every((bm: any) => bm.show_band_member_decision);
+            console.log('🔍 DEBUG: All accepted?', allAccepted);
+            
+            return {
+              ...member,
+              show_member_consensus: updatedConsensus,
+              show_member_decision: allAccepted
+            };
+          }
+        }
+        return member;
+      });
+
+      // Check if we found the member to update
+      if (showMemberIndex === -1 || bandMemberIndex === -1) {
+        console.error('🔍 DEBUG: Could not find band member in consensus array');
+        console.error('🔍 DEBUG: showMemberIndex:', showMemberIndex, 'bandMemberIndex:', bandMemberIndex);
+        Alert.alert('Error', 'Could not find your membership in this show');
+        return;
+      }
+
+      // Update the show
+      console.log('🔍 DEBUG: About to update show with members:', JSON.stringify(updatedMembers, null, 2));
+      
+      const { data: updateData, error: updateError } = await supabase
+        .from('shows')
+        .update({ show_members: updatedMembers })
+        .eq('show_id', notification.notification_data.show_id)
+        .select();
+
+      console.log('🔍 DEBUG: Update result:', { data: updateData, error: updateError });
+
+      if (updateError) {
+        console.error('🔍 DEBUG: Update failed:', updateError);
+        Alert.alert('Error', 'Could not update show status');
+        return;
+      }
+
+      if (!updateData || updateData.length === 0) {
+        console.error('🔍 DEBUG: No rows updated');
+        Alert.alert('Error', 'Show not found or not updated');
+        return;
+      }
+
+      // Mark notification as handled
+      await supabase
+        .from('notifications')
+        .update({ action_required: false, is_read: true })
+        .eq('notification_id', notification.notification_id);
+
+      // Check if the entire band has now accepted
+      const updatedBandMember = updatedMembers[showMemberIndex];
+      if (updatedBandMember?.show_member_decision) {
+        // All band members accepted - send band acceptance notifications
+        const recipientIds = new Set<string>();
+        
+        // Add promoter
+        recipientIds.add(showData.show_promoter);
+        
+        // Add venue spotter_id
+        const { data: venueData } = await supabase
+          .from('venues')
+          .select('spotter_id')
+          .eq('venue_id', showData.show_venue)
+          .single();
+        
+        if (venueData?.spotter_id) {
+          recipientIds.add(venueData.spotter_id);
+        }
+
+        // Add all show members (artists and band members)
+        for (const member of showData.show_members) {
+          if (member.show_member_type === 'artist') {
+            recipientIds.add(member.show_member_id);
+          } else if (member.show_member_type === 'band' && member.show_member_consensus) {
+            for (const bandMember of member.show_member_consensus) {
+              recipientIds.add(bandMember.show_band_member_id);
+            }
+          }
+        }
+
+        // Send band acceptance notifications
+        for (const recipientId of recipientIds) {
+          await notificationService.createBandShowAcceptanceNotification(
+            showData.show_promoter,
+            updatedBandMember.show_member_name,
+            recipientId,
+            showData.show_id,
+            {
+              venue_name: notification.notification_data.venue_name,
+              preferred_date: notification.notification_data.preferred_date,
+              preferred_time: notification.notification_data.preferred_time
+            }
+          );
+        }
+
+        Alert.alert('Success', `Your band ${updatedBandMember.show_member_name} has accepted the show invitation!`);
+      } else {
+        Alert.alert('Success', 'You have accepted the show invitation. Waiting for other band members to accept.');
+      }
+
+      fetchNotifications();
+    } catch (error) {
+      console.error('Error accepting band show invitation:', error);
+      Alert.alert('Error', 'Could not accept invitation');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Handle band member show invitation reject
+  const handleBandMemberShowInvitationReject = async (notification: Notification) => {
+    try {
+      Alert.alert(
+        'Reject Invitation',
+        'Are you sure you want to reject this show invitation for your band?',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Reject',
+            style: 'destructive',
+            onPress: async () => {
+              // Mark notification as handled
+              await supabase
+                .from('notifications')
+                .update({ action_required: false, is_read: true })
+                .eq('notification_id', notification.notification_id);
+
+              Alert.alert('Success', 'You have declined the show invitation for your band');
+              fetchNotifications();
+            },
+          },
+        ]
+      );
+    } catch (error) {
+      console.error('Error rejecting band show invitation:', error);
+      Alert.alert('Error', 'Could not reject invitation');
+    }
+  };
+
+  // Handle venue show invitation accept (opens wizard)
+  const handleVenueShowInvitationAccept = async (notification: Notification) => {
+    try {
+      if (!notification.notification_data?.show_id) {
+        Alert.alert('Error', 'Invalid show invitation');
+        return;
+      }
+
+      // Close the notifications page first
+      onClose();
+      
+      // Small delay to ensure the page closes before navigation
+      setTimeout(() => {
+        navigation.navigate('VenueAcceptanceWizard' as never, {
+          show_id: notification.notification_data.show_id
+        } as never);
+      }, 100);
+
+      // Mark notification as read
+      await supabase
+        .from('notifications')
+        .update({ is_read: true })
+        .eq('notification_id', notification.notification_id);
+
+    } catch (error) {
+      console.error('Error handling venue invitation:', error);
+      Alert.alert('Error', 'Could not process invitation');
+    }
+  };
+
+  // Handle venue show invitation reject
+  const handleVenueShowInvitationReject = async (notification: Notification) => {
+    try {
+      Alert.alert(
+        'Reject Invitation',
+        'Are you sure you want to reject hosting this show?',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Reject',
+            style: 'destructive',
+            onPress: async () => {
+              // Mark notification as handled
+              await supabase
+                .from('notifications')
+                .update({ action_required: false, is_read: true })
+                .eq('notification_id', notification.notification_id);
+
+              Alert.alert('Success', 'You have declined to host this show');
+              fetchNotifications();
+            },
+          },
+        ]
+      );
+    } catch (error) {
+      console.error('Error rejecting venue invitation:', error);
+      Alert.alert('Error', 'Could not reject invitation');
+    }
+  };
+
   const unreadCount = notifications.filter(n => !n.is_read).length;
 
   return (
@@ -711,6 +1113,18 @@ const NotificationsPage: React.FC<NotificationsPageProps> = ({ onClose }) => {
                     if (!notification.is_read) {
                       markAsRead(notification.notification_id);
                     }
+                    
+                    // Handle navigation for venue acceptance and show activated notifications
+                    if ((notification.notification_type === 'venue_show_acceptance' || 
+                         (notification.notification_type === 'general' && notification.notification_data?.notification_subtype === 'show_activated')) && 
+                        notification.notification_data?.show_id) {
+                      onClose(); // Close notifications page
+                      setTimeout(() => {
+                        navigation.navigate('ShowBill' as never, {
+                          show_id: notification.notification_data.show_id
+                        } as never);
+                      }, 100);
+                    }
                   }}
                 >
                   <View style={styles.notificationHeader}>
@@ -725,6 +1139,14 @@ const NotificationsPage: React.FC<NotificationsPageProps> = ({ onClose }) => {
                   <Text style={styles.notificationMessage}>
                     {notification.notification_message}
                   </Text>
+                  
+                  {/* Show Bill Link for venue acceptance and show activated notifications */}
+                  {(notification.notification_type === 'venue_show_acceptance' || 
+                    (notification.notification_type === 'general' && notification.notification_data?.notification_subtype === 'show_activated')) && (
+                    <View style={styles.showBillLink}>
+                      <Text style={styles.showBillLinkText}>👆 Tap to view show bill</Text>
+                    </View>
+                  )}
                   
                   {notification.sender_name && (
                     <Text style={styles.senderName}>
@@ -788,6 +1210,63 @@ const NotificationsPage: React.FC<NotificationsPageProps> = ({ onClose }) => {
                           <Text style={styles.rejectButtonText}>Reject</Text>
                         </TouchableOpacity>
                       </View>
+                    </View>
+                  )}
+
+                  {/* Artist Show Invitation */}
+                  {notification.notification_type === 'artist_show_invitation' && notification.action_required && (
+                    <View style={styles.actionButtons}>
+                      <TouchableOpacity
+                        style={styles.acceptButton}
+                        onPress={() => handleArtistShowInvitationAccept(notification)}
+                      >
+                        <Text style={styles.acceptButtonText}>Accept Show</Text>
+                      </TouchableOpacity>
+                      
+                      <TouchableOpacity
+                        style={styles.rejectButton}
+                        onPress={() => handleArtistShowInvitationReject(notification)}
+                      >
+                        <Text style={styles.rejectButtonText}>Decline</Text>
+                      </TouchableOpacity>
+                    </View>
+                  )}
+
+                  {/* Band Member Show Invitation */}
+                  {notification.notification_type === 'band_member_show_invitation' && notification.action_required && (
+                    <View style={styles.actionButtons}>
+                      <TouchableOpacity
+                        style={styles.acceptButton}
+                        onPress={() => handleBandMemberShowInvitationAccept(notification)}
+                      >
+                        <Text style={styles.acceptButtonText}>Accept for Band</Text>
+                      </TouchableOpacity>
+                      
+                      <TouchableOpacity
+                        style={styles.rejectButton}
+                        onPress={() => handleBandMemberShowInvitationReject(notification)}
+                      >
+                        <Text style={styles.rejectButtonText}>Decline</Text>
+                      </TouchableOpacity>
+                    </View>
+                  )}
+
+                  {/* Venue Show Invitation */}
+                  {notification.notification_type === 'venue_show_invitation' && notification.action_required && (
+                    <View style={styles.actionButtons}>
+                      <TouchableOpacity
+                        style={styles.acceptButton}
+                        onPress={() => handleVenueShowInvitationAccept(notification)}
+                      >
+                        <Text style={styles.acceptButtonText}>Host Show</Text>
+                      </TouchableOpacity>
+                      
+                      <TouchableOpacity
+                        style={styles.rejectButton}
+                        onPress={() => handleVenueShowInvitationReject(notification)}
+                      >
+                        <Text style={styles.rejectButtonText}>Decline</Text>
+                      </TouchableOpacity>
                     </View>
                   )}
                 </TouchableOpacity>
@@ -1001,6 +1480,21 @@ const styles = StyleSheet.create({
   },
   previewButtonText: {
     color: '#fff',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  showBillLink: {
+    backgroundColor: 'rgba(255, 0, 255, 0.1)',
+    borderColor: '#ff00ff',
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    marginTop: 8,
+    alignItems: 'center',
+  },
+  showBillLinkText: {
+    color: '#ff00ff',
     fontSize: 12,
     fontWeight: '600',
   },

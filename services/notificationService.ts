@@ -439,6 +439,462 @@ class NotificationService {
     });
   }
 
+  // Create artist show invitation notification
+  async createArtistShowInvitationNotification(
+    promoterId: string,
+    promoterName: string,
+    recipientId: string,
+    showId: string,
+    showData: any
+  ): Promise<{ success: boolean; error?: string; data?: any }> {
+    return this.createNotification({
+      notification_type: 'artist_show_invitation',
+      notification_recipient: recipientId,
+      notification_sender: promoterId,
+      notification_title: 'Show Invitation',
+      notification_message: `${promoterName} has promoted you as a performer in a show! Click below to view the show bill:`,
+      notification_data: {
+        show_id: showId,
+        venue_name: showData.venue_name,
+        preferred_date: showData.preferred_date,
+        preferred_time: showData.preferred_time,
+        show_members: showData.show_members,
+        member_position: showData.member_position
+      },
+      is_read: false,
+      action_required: true,
+    });
+  }
+
+  // Create band member show invitation notification
+  async createBandMemberShowInvitationNotification(
+    promoterId: string,
+    promoterName: string,
+    recipientId: string,
+    bandName: string,
+    showId: string,
+    showData: any
+  ): Promise<{ success: boolean; error?: string; data?: any }> {
+    return this.createNotification({
+      notification_type: 'band_member_show_invitation',
+      notification_recipient: recipientId,
+      notification_sender: promoterId,
+      notification_title: 'Show Invitation',
+      notification_message: `${promoterName} has promoted your band ${bandName} as a performer in a show! Click below to view the show bill:`,
+      notification_data: {
+        show_id: showId,
+        band_name: bandName,
+        venue_name: showData.venue_name,
+        preferred_date: showData.preferred_date,
+        preferred_time: showData.preferred_time,
+        show_members: showData.show_members,
+        member_position: showData.member_position
+      },
+      is_read: false,
+      action_required: true,
+    });
+  }
+
+  // Create artist show acceptance notification
+  async createArtistShowAcceptanceNotification(
+    acceptingArtistId: string,
+    acceptingArtistName: string,
+    recipientId: string,
+    showId: string,
+    showData: any
+  ): Promise<{ success: boolean; error?: string; data?: any }> {
+    return this.createNotification({
+      notification_type: 'artist_show_acceptance',
+      notification_recipient: recipientId,
+      notification_sender: acceptingArtistId,
+      notification_title: 'Artist Show Acceptance',
+      notification_message: `${acceptingArtistName} has accepted an invitation to a show! Click below to view the show bill:`,
+      notification_data: {
+        show_id: showId,
+        venue_name: showData.venue_name,
+        preferred_date: showData.preferred_date,
+        preferred_time: showData.preferred_time
+      },
+      is_read: false,
+      action_required: false,
+    });
+  }
+
+  // Create band show acceptance notification
+  async createBandShowAcceptanceNotification(
+    promoterId: string,
+    bandName: string,
+    recipientId: string,
+    showId: string,
+    showData: any
+  ): Promise<{ success: boolean; error?: string; data?: any }> {
+    return this.createNotification({
+      notification_type: 'band_show_acceptance',
+      notification_recipient: recipientId,
+      notification_sender: promoterId,
+      notification_title: 'Band Show Acceptance',
+      notification_message: `${bandName} have accepted an invitation to a show! Click below to view the show bill:`,
+      notification_data: {
+        show_id: showId,
+        band_name: bandName,
+        venue_name: showData.venue_name,
+        preferred_date: showData.preferred_date,
+        preferred_time: showData.preferred_time
+      },
+      is_read: false,
+      action_required: false,
+    });
+  }
+
+  // Create venue show invitation notification
+  async createVenueShowInvitationNotification(
+    promoterId: string,
+    promoterName: string,
+    venueSpotterId: string,
+    venueName: string,
+    showId: string,
+    showData: any
+  ): Promise<{ success: boolean; error?: string; data?: any }> {
+    return this.createNotification({
+      notification_type: 'venue_show_invitation',
+      notification_recipient: venueSpotterId,
+      notification_sender: promoterId,
+      notification_title: 'Show Invitation',
+      notification_message: `${promoterName} has promoted you to host a show! Click below to view the show bill:`,
+      notification_data: {
+        show_id: showId,
+        venue_name: venueName,
+        venue_id: showData.venue_id,
+        preferred_date: showData.preferred_date,
+        preferred_time: showData.preferred_time,
+        show_members: showData.show_members
+      },
+      is_read: false,
+      action_required: true,
+    });
+  }
+
+  // Create venue show acceptance notification
+  async createVenueShowAcceptanceNotification(
+    venueId: string,
+    venueName: string,
+    recipientId: string,
+    showId: string,
+    showData: any
+  ): Promise<{ success: boolean; error?: string; data?: any }> {
+    return this.createNotification({
+      notification_type: 'venue_show_acceptance',
+      notification_recipient: recipientId,
+      notification_sender: venueId,
+      notification_title: 'Venue Show Acceptance',
+      notification_message: `${venueName} has accepted an invitation to a show! Click below to view the show bill:`,
+      notification_data: {
+        show_id: showId,
+        venue_name: venueName,
+        final_date: showData.final_date,
+        final_time: showData.final_time,
+        ticket_price: showData.ticket_price,
+        venue_percentage: showData.venue_percentage,
+        artist_percentage: showData.artist_percentage
+      },
+      is_read: false,
+      action_required: false,
+    });
+  }
+
+  // Send all show invitations after show creation
+  async sendShowInvitations(
+    showId: string,
+    promoterId: string,
+    promoterName: string,
+    showMembers: any[],
+    venueId: string,
+    venueName: string,
+    venueSpotterId: string,
+    showData: any
+  ): Promise<{ success: boolean; error?: string; results?: any[] }> {
+    const results = [];
+
+    // Send invitations to all show members
+    for (const member of showMembers) {
+      if (member.show_member_type === 'artist') {
+        // Send artist invitation
+        const result = await this.createArtistShowInvitationNotification(
+          promoterId,
+          promoterName,
+          member.show_member_id,
+          showId,
+          {
+            ...showData,
+            member_position: member.show_member_position
+          }
+        );
+        results.push({ member, result });
+      } else if (member.show_member_type === 'band' && member.show_member_consensus) {
+        // Send band member invitations
+        for (const bandMember of member.show_member_consensus) {
+          const result = await this.createBandMemberShowInvitationNotification(
+            promoterId,
+            promoterName,
+            bandMember.show_band_member_id,
+            member.show_member_name,
+            showId,
+            {
+              ...showData,
+              member_position: member.show_member_position
+            }
+          );
+          results.push({ bandMember, result });
+        }
+      }
+    }
+
+    // Send venue invitation
+    const venueResult = await this.createVenueShowInvitationNotification(
+      promoterId,
+      promoterName,
+      venueSpotterId,
+      venueName,
+      showId,
+      {
+        ...showData,
+        venue_id: venueId
+      }
+    );
+    results.push({ venue: { venueId, venueName }, result: venueResult });
+
+    const allSuccess = results.every(r => r.result.success);
+    return {
+      success: allSuccess,
+      error: allSuccess ? undefined : 'Some invitations failed to send',
+      results
+    };
+  }
+
+  // Send notification (simplified method for venue acceptance wizard)
+  async sendNotification(
+    recipientId: string,
+    type: string,
+    data: any
+  ): Promise<{ success: boolean; error?: string; data?: any }> {
+    let title = '';
+    let message = '';
+    
+    switch (type) {
+      case 'venue_acceptance':
+      case 'venue_show_acceptance':
+        title = 'Show Confirmed!';
+        message = `${data.venue_name} has confirmed your show for ${data.show_date} at ${data.show_time}. Your guarantee is $${data.artist_guarantee?.toFixed(2)} if sold out. Tap to view show bill.`;
+        break;
+      default:
+        title = 'Notification';
+        message = 'You have a new notification.';
+    }
+
+    return this.createNotification({
+      notification_type: type,
+      notification_recipient: recipientId,
+      notification_sender: null,
+      notification_title: title,
+      notification_message: message,
+      notification_data: data,
+      is_read: false,
+      action_required: false,
+    });
+  }
+
+  // Check if show should be activated and update status
+  async checkAndActivateShow(showId: string): Promise<{ activated: boolean; error?: string }> {
+    try {
+      console.log('🎭 Checking if show should be activated:', showId);
+      
+      // Get current show data
+      const { data: show, error: showError } = await supabase
+        .from('shows')
+        .select('*')
+        .eq('show_id', showId)
+        .single();
+
+      if (showError || !show) {
+        console.error('❌ Error fetching show for activation check:', showError);
+        return { activated: false, error: 'Failed to fetch show data' };
+      }
+
+      // Check if venue has accepted
+      if (!show.venue_decision) {
+        console.log('⏳ Venue has not accepted yet');
+        return { activated: false };
+      }
+
+      // Check if all show members have accepted
+      let allMembersAccepted = true;
+      const pendingMembers: string[] = [];
+
+      for (const member of show.show_members || []) {
+        if (member.show_member_type === 'artist') {
+          if (!member.show_member_decision) {
+            allMembersAccepted = false;
+            pendingMembers.push(member.show_member_name || 'Artist');
+          }
+        } else if (member.show_member_type === 'band') {
+          if (!member.show_member_decision) {
+            allMembersAccepted = false;
+            pendingMembers.push(member.show_member_name || 'Band');
+          }
+        }
+      }
+
+      console.log('🎭 All members accepted:', allMembersAccepted);
+      if (pendingMembers.length > 0) {
+        console.log('⏳ Still pending:', pendingMembers);
+      }
+
+      // If show is already active, no need to update
+      if (show.show_status === 'active') {
+        console.log('✅ Show is already active');
+        return { activated: false };
+      }
+
+      // If all conditions are met, activate the show
+      if (allMembersAccepted && show.venue_decision) {
+        console.log('🎉 Activating show!');
+        
+        const { error: updateError } = await supabase
+          .from('shows')
+          .update({ show_status: 'active' })
+          .eq('show_id', showId);
+
+        if (updateError) {
+          console.error('❌ Error activating show:', updateError);
+          return { activated: false, error: 'Failed to update show status' };
+        }
+
+        // Send show_activated notifications
+        await this.sendShowActivatedNotifications(show);
+        
+        return { activated: true };
+      }
+
+      return { activated: false };
+    } catch (error: any) {
+      console.error('❌ Error in checkAndActivateShow:', error);
+      return { activated: false, error: error.message };
+    }
+  }
+
+  // Send show activated notifications to all participants
+  async sendShowActivatedNotifications(showData: any): Promise<void> {
+    try {
+      console.log('📢 Sending show activated notifications');
+      
+      const notifications = [];
+
+      // Notify all show members
+      for (const member of showData.show_members || []) {
+        if (member.show_member_type === 'artist') {
+          notifications.push(
+            this.createNotification({
+              notification_type: 'general',
+              notification_recipient: member.show_member_id,
+              notification_sender: null,
+              notification_title: 'Show is Now Active!',
+              notification_message: `Great news! The show at ${showData.venue_name || 'venue'} is now confirmed and active. All performers and venue have accepted!`,
+              notification_data: {
+                show_id: showData.show_id,
+                venue_name: showData.venue_name,
+                show_date: showData.show_date || showData.show_preferred_date,
+                show_time: showData.show_time || showData.show_preferred_time,
+                notification_subtype: 'show_activated'
+              },
+              is_read: false,
+              action_required: false,
+            })
+          );
+        } else if (member.show_member_type === 'band' && member.show_member_consensus) {
+          // Notify all band members
+          for (const bandMember of member.show_member_consensus) {
+            notifications.push(
+              this.createNotification({
+                notification_type: 'general',
+                notification_recipient: bandMember.show_band_member_id,
+                notification_sender: null,
+                notification_title: 'Show is Now Active!',
+                notification_message: `Great news! The show at ${showData.venue_name || 'venue'} is now confirmed and active. All performers and venue have accepted!`,
+                notification_data: {
+                  show_id: showData.show_id,
+                  venue_name: showData.venue_name,
+                  show_date: showData.show_date || showData.show_preferred_date,
+                  show_time: showData.show_time || showData.show_preferred_time,
+                  notification_subtype: 'show_activated'
+                },
+                is_read: false,
+                action_required: false,
+              })
+            );
+          }
+        }
+      }
+
+      // Notify venue
+      if (showData.show_venue) {
+        // Get venue spotter ID
+        const { data: venue } = await supabase
+          .from('venues')
+          .select('spotter_id')
+          .eq('venue_id', showData.show_venue)
+          .single();
+
+        if (venue?.spotter_id) {
+          notifications.push(
+            this.createNotification({
+              notification_type: 'general',
+              notification_recipient: venue.spotter_id,
+              notification_sender: null,
+              notification_title: 'Show is Now Active!',
+              notification_message: `Great news! Your show is now confirmed and active. All performers have accepted!`,
+              notification_data: {
+                show_id: showData.show_id,
+                venue_name: showData.venue_name,
+                show_date: showData.show_date || showData.show_preferred_date,
+                show_time: showData.show_time || showData.show_preferred_time,
+                notification_subtype: 'show_activated'
+              },
+              is_read: false,
+              action_required: false,
+            })
+          );
+        }
+      }
+
+      // Notify promoter
+      notifications.push(
+        this.createNotification({
+          notification_type: 'general',
+          notification_recipient: showData.show_promoter,
+          notification_sender: null,
+          notification_title: 'Show is Now Active!',
+          notification_message: `Congratulations! Your promoted show is now confirmed and active. All performers and venue have accepted!`,
+          notification_data: {
+            show_id: showData.show_id,
+            venue_name: showData.venue_name,
+            show_date: showData.show_date || showData.show_preferred_date,
+            show_time: showData.show_time || showData.show_preferred_time,
+            notification_subtype: 'show_activated'
+          },
+          is_read: false,
+          action_required: false,
+        })
+      );
+
+      // Send all notifications
+      await Promise.all(notifications);
+      console.log('✅ Show activated notifications sent');
+      
+    } catch (error) {
+      console.error('❌ Error sending show activated notifications:', error);
+    }
+  }
+
   // Get user's full name (helper function)
   async getUserFullName(userId: string): Promise<string> {
     try {

@@ -6,7 +6,8 @@
       "Bash(tail:*)",
       "Bash(git checkout:*)",
       "Bash(rm:*)",
-      "Bash(cat:*)"
+      "Bash(cat:*)",
+      "Bash(git add:*)"
     ],
     "deny": []
   }

@@ -17,6 +17,8 @@ import BandPicture from './app/bandPicture';
 import BandPublicProfile from './components/bandPublicProfile';
 import ArtistPublicProfile from './components/artistPublicProfile';
 import VenuePublicProfile from './components/venuePublicProfile';
+import ShowBill from './components/ShowBill';
+import VenueAcceptanceWizard from './components/VenueAcceptanceWizard';
 import { UserProvider } from "./context/userContext";
 import { MusicPlayerProvider } from "./components/player";
 import BottomTabs from "./navigation/BottomTabs"; // contains Profile, MapHome, etc.
@@ -36,6 +38,8 @@ export type RootStackParamList = {
   BandPublicProfile: { band_id: string };
   ArtistPublicProfile: { artist_id: string };
   VenuePublicProfile: { venue_id: string };
+  ShowBill: { show_id: string };
+  VenueAcceptanceWizard: { show_id: string };
   BottomTabs: undefined; // 👈 all main pages now live here
 };
 
@@ -66,6 +70,8 @@ export default function App() {
               <Stack.Screen name="BandPublicProfile" component={BandPublicProfile} />
               <Stack.Screen name="ArtistPublicProfile" component={ArtistPublicProfile} />
               <Stack.Screen name="VenuePublicProfile" component={VenuePublicProfile} />
+              <Stack.Screen name="ShowBill" component={ShowBill} />
+              <Stack.Screen name="VenueAcceptanceWizard" component={VenueAcceptanceWizard} />
               <Stack.Screen name="BottomTabs" component={BottomTabs} />
             </Stack.Navigator>
           </NavigationContainer>

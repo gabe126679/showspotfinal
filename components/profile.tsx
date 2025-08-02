@@ -17,12 +17,13 @@ import {
 } from "react-native";
 import { PanGestureHandler, State } from 'react-native-gesture-handler';
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useNavigation } from "@react-navigation/native";
+import { useNavigation, useFocusEffect } from "@react-navigation/native";
 import { useRouter } from "expo-router";
 import { supabase } from "../lib/supabase";
 import { LinearGradient } from "expo-linear-gradient";
 import SongUploadForm from "./SongUploadForm";
 import { useMusicPlayer } from "./player";
+import { songPurchaseService, SongPurchase } from "../services/songPurchaseService";
 
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get("window");
@@ -145,6 +146,9 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
   // Bands data
   const [bands, setBands] = useState<any[]>([]);
 
+  // Purchased songs data
+  const [purchasedSongs, setPurchasedSongs] = useState<SongPurchase[]>([]);
+
   // Animation refs
   const panelTranslateY = useRef(new Animated.Value(COLLAPSED_TRANSLATE_Y)).current;
   const handleOpacity = useRef(new Animated.Value(1)).current;
@@ -263,6 +267,9 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
           }
         }
 
+        // Fetch purchased songs for spotter profile
+        await fetchPurchasedSongs(userId);
+
         // Fade in animation
         Animated.timing(fadeAnim, {
           toValue: 1,
@@ -280,12 +287,52 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
     fetchProfileData();
   }, [fadeAnim]);
 
+  const fetchPurchasedSongs = async (userId: string) => {
+    try {
+      const result = await songPurchaseService.getUserPurchasedSongs(userId);
+      if (result.success && result.songs) {
+        setPurchasedSongs(result.songs);
+        console.log('Purchased songs loaded:', result.songs.length);
+      } else {
+        console.error('Error fetching purchased songs:', result.error);
+        setPurchasedSongs([]);
+      }
+    } catch (error) {
+      console.error('Error fetching purchased songs:', error);
+      setPurchasedSongs([]);
+    }
+  };
+
   // Fetch songs when profile changes (skip venues)
   useEffect(() => {
     if (activeProfile && (artistID || activeProfile === 'spotter')) {
       fetchSongs();
     }
   }, [activeProfile, artistID]);
+
+  // Auto-refresh purchased songs when returning to this screen
+  useFocusEffect(
+    useCallback(() => {
+      if (activeProfile === 'spotter') {
+        // Refresh purchased songs when screen comes into focus
+        const fetchPurchasedSongsOnFocus = async () => {
+          try {
+            const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+            if (sessionError) return;
+            
+            const userId = sessionData.session?.user?.id;
+            if (userId) {
+              await fetchPurchasedSongs(userId);
+            }
+          } catch (error) {
+            console.error('Error refreshing purchased songs on focus:', error);
+          }
+        };
+        
+        fetchPurchasedSongsOnFocus();
+      }
+    }, [activeProfile])
+  );
 
   // Pan responder for gesture handling
   const panResponder = useRef(
@@ -480,6 +527,25 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
 
   const handleVenuePress = () => {
     navigation.navigate("VenueSignup" as never);
+  };
+
+  // Sign out handler
+  const handleSignOut = async () => {
+    try {
+      console.log('Signing out user...');
+      const { error } = await supabase.auth.signOut();
+      if (error) {
+        console.error('Error signing out:', error);
+      } else {
+        console.log('Successfully signed out');
+        navigation.reset({
+          index: 0,
+          routes: [{ name: 'Welcome' as never }],
+        });
+      }
+    } catch (error) {
+      console.error('Unexpected error during sign out:', error);
+    }
   };
 
   const handleSongPress = (song: Song) => {
@@ -828,6 +894,78 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
                         </TouchableOpacity>
                       ))}
                     </ScrollView>
+                  ) : tab.id === "purchased" && purchasedSongs.length > 0 ? (
+                    <ScrollView 
+                      style={styles.songsList}
+                      showsVerticalScrollIndicator={false}
+                      nestedScrollEnabled={true}
+                    >
+                      {purchasedSongs.map((purchase) => (
+                        <TouchableOpacity 
+                          key={`${purchase.song_id}-${purchase.purchase_date}`}
+                          style={styles.songPurchaseItem}
+                          onPress={() => {
+                            // Play the purchased song
+                            const songData = {
+                              song_id: purchase.song_id,
+                              song_title: purchase.song_title,
+                              song_image: purchase.song_image,
+                              song_file: purchase.song_file,
+                              artist_id: purchase.song_artist,
+                              spotter_id: purchase.song_artist, // Use the song's artist ID
+                              song_price: purchase.song_price,
+                              created_at: purchase.purchase_date,
+                              song_status: 'active',
+                              song_approved: true,
+                              song_type: purchase.song_type,
+                            };
+                            
+                            // Convert all purchased songs to the song format for playlist
+                            const playlist = purchasedSongs.map(p => ({
+                              song_id: p.song_id,
+                              song_title: p.song_title,
+                              song_image: p.song_image,
+                              song_file: p.song_file,
+                              artist_id: p.song_artist,
+                              spotter_id: p.song_artist, // Use the song's artist ID
+                              song_price: p.song_price,
+                              created_at: p.purchase_date,
+                              song_status: 'active',
+                              song_approved: true,
+                              song_type: p.song_type,
+                            }));
+                            
+                            playSong(songData, playlist);
+                            console.log('Playing purchased song:', purchase.song_title);
+                          }}
+                        >
+                          <Image 
+                            source={{ 
+                              uri: purchase.song_image || 'https://via.placeholder.com/50' 
+                            }}
+                            style={styles.bandImage}
+                          />
+                          <View style={styles.bandInfo}>
+                            <Text style={styles.bandName}>
+                              {purchase.song_title}
+                            </Text>
+                            <Text style={styles.bandStatus}>
+                              by {purchase.artist_name || purchase.band_name || 'Unknown Artist'}
+                            </Text>
+                            <Text style={styles.bandMembers}>
+                              {purchase.purchase_type === 'free' ? 'Free' : `$${purchase.song_price}`} • 
+                              {new Date(purchase.purchase_date).toLocaleDateString()}
+                            </Text>
+                            <Text style={styles.songType}>
+                              {purchase.song_type === 'band' ? '🎸 Band Song' : '🎤 Artist Song'}
+                            </Text>
+                          </View>
+                          <View style={styles.playButtonContainer}>
+                            <Text style={styles.playButtonIcon}>▶️</Text>
+                          </View>
+                        </TouchableOpacity>
+                      ))}
+                    </ScrollView>
                   ) : (
                     <Text style={styles.tabContentText}>
                       {((activeProfile === 'artist' || activeProfile === 'venue') && isOwner) 
@@ -891,7 +1029,7 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
                   </LinearGradient>
                 </TouchableOpacity>
                 
-                <TouchableOpacity style={styles.signOutButton}>
+                <TouchableOpacity style={styles.signOutButton} onPress={handleSignOut}>
                   <Text style={styles.signOutText}>Sign Out</Text>
                 </TouchableOpacity>
               </>
@@ -936,7 +1074,7 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
                   </LinearGradient>
                 </TouchableOpacity>
                 
-                <TouchableOpacity style={styles.signOutButton}>
+                <TouchableOpacity style={styles.signOutButton} onPress={handleSignOut}>
                   <Text style={styles.signOutText}>Sign Out</Text>
                 </TouchableOpacity>
               </>
@@ -981,7 +1119,7 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
                   </LinearGradient>
                 </TouchableOpacity>
                 
-                <TouchableOpacity style={styles.signOutButton}>
+                <TouchableOpacity style={styles.signOutButton} onPress={handleSignOut}>
                   <Text style={styles.signOutText}>Sign Out</Text>
                 </TouchableOpacity>
               </>
@@ -1609,6 +1747,39 @@ const styles = StyleSheet.create({
     fontFamily: 'Amiko-Regular',
     color: '#fff',
     fontWeight: '600',
+  },
+  songPurchaseItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 15,
+    backgroundColor: '#fff',
+    marginBottom: 8,
+    borderRadius: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  songType: {
+    fontSize: 12,
+    fontFamily: 'Amiko-Regular',
+    color: '#666',
+    marginTop: 2,
+  },
+  playButtonContainer: {
+    backgroundColor: '#ff00ff',
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginLeft: 10,
+  },
+  playButtonIcon: {
+    fontSize: 16,
+    color: '#fff',
   },
 });
 

@@ -117,10 +117,13 @@ class TicketService {
         console.log('Show is now sold out!');
       }
 
+      console.log('Updating show with data:', updateData);
       const { error: updateError } = await supabase
         .from('shows')
         .update(updateData)
         .eq('show_id', showId);
+      
+      console.log('Update result - error:', updateError);
 
       if (updateError) {
         console.error('Error updating show:', updateError);

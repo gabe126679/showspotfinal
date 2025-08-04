@@ -190,7 +190,7 @@ export default function ArtistPicture({ navigation }) {
         .from('artists')
         .update({
           artist_profile_image: uploadedUrls[0], // First image as profile image
-          artist_secondary_images: uploadedUrls, // All images as secondary images
+          artist_secondary_images: uploadedUrls.slice(1), // All images EXCEPT the first one
         })
         .eq('spotter_id', user.id);
 

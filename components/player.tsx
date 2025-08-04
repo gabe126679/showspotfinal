@@ -9,13 +9,16 @@ import {
   FlatList, 
   Alert,
   Dimensions,
-  Animated
+  Animated,
+  TextInput,
+  ScrollView
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useNavigation } from "@react-navigation/native";
 import { Audio } from 'expo-av';
 import { LinearGradient } from 'expo-linear-gradient';
 import { supabase } from '../lib/supabase';
+import PlaylistModal from './PlaylistModal';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -28,14 +31,10 @@ interface Song {
   spotter_id: string;
   song_price: string;
   created_at: string;
+  song_type?: 'artist' | 'band';
+  band_id?: string;
 }
 
-interface Playlist {
-  id: string;
-  playlist_name: string;
-  spotter_id: string;
-  created_at: string;
-}
 
 interface MusicPlayerContextType {
   currentSong: Song | null;
@@ -327,142 +326,6 @@ export const useMusicPlayer = () => {
   return context;
 };
 
-const PlaylistModal: React.FC<{
-  visible: boolean;
-  onClose: () => void;
-  song: Song;
-}> = ({ visible, onClose, song }) => {
-  const [playlists, setPlaylists] = useState<Playlist[]>([]);
-  const [loading, setLoading] = useState(false);
-
-  useEffect(() => {
-    if (visible) {
-      fetchPlaylists();
-    }
-  }, [visible]);
-
-  const fetchPlaylists = async () => {
-    try {
-      const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
-      if (sessionError) throw sessionError;
-
-      const userId = sessionData.session?.user?.id;
-      if (!userId) return;
-
-      const { data, error } = await supabase
-        .from('playlists')
-        .select('*')
-        .eq('spotter_id', userId)
-        .order('created_at', { ascending: false });
-
-      if (error) throw error;
-      setPlaylists(data || []);
-    } catch (error) {
-      console.error('Error fetching playlists:', error);
-    }
-  };
-
-  const addToPlaylist = async (playlistId: string) => {
-    try {
-      setLoading(true);
-      const { error } = await supabase
-        .from('playlist_songs')
-        .insert({
-          playlist_id: playlistId,
-          song_id: song.song_id,
-          added_at: new Date().toISOString(),
-        });
-
-      if (error) throw error;
-      
-      Alert.alert('Success', 'Song added to playlist!');
-      onClose();
-    } catch (error) {
-      console.error('Error adding to playlist:', error);
-      Alert.alert('Error', 'Could not add song to playlist');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const createNewPlaylist = async () => {
-    Alert.prompt(
-      'Create New Playlist',
-      'Enter playlist name:',
-      async (playlistName) => {
-        if (!playlistName?.trim()) return;
-
-        try {
-          setLoading(true);
-          const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
-          if (sessionError) throw sessionError;
-
-          const userId = sessionData.session?.user?.id;
-          if (!userId) return;
-
-          const { data, error } = await supabase
-            .from('playlists')
-            .insert({
-              playlist_name: playlistName,
-              spotter_id: userId,
-              created_at: new Date().toISOString(),
-            })
-            .select()
-            .single();
-
-          if (error) throw error;
-          
-          await addToPlaylist(data.id);
-        } catch (error) {
-          console.error('Error creating playlist:', error);
-          Alert.alert('Error', 'Could not create playlist');
-        } finally {
-          setLoading(false);
-        }
-      }
-    );
-  };
-
-  return (
-    <Modal visible={visible} animationType="slide" transparent>
-      <View style={styles.modalOverlay}>
-        <View style={styles.modalContent}>
-          <Text style={styles.modalTitle}>Add to Playlist</Text>
-          
-          <FlatList
-            data={playlists}
-            keyExtractor={(item) => item.id}
-            renderItem={({ item }) => (
-              <TouchableOpacity
-                style={styles.playlistItem}
-                onPress={() => addToPlaylist(item.id)}
-                disabled={loading}
-              >
-                <Text style={styles.playlistName}>{item.playlist_name}</Text>
-              </TouchableOpacity>
-            )}
-            style={styles.playlistsList}
-          />
-
-          <View style={styles.newPlaylistSection}>
-            <Text style={styles.newPlaylistTitle}>Create New Playlist</Text>
-            <TouchableOpacity
-              style={styles.createPlaylistButton}
-              onPress={createNewPlaylist}
-              disabled={loading}
-            >
-              <Text style={styles.createPlaylistText}>+ Create New Playlist</Text>
-            </TouchableOpacity>
-          </View>
-
-          <TouchableOpacity style={styles.closeButton} onPress={onClose}>
-            <Text style={styles.closeButtonText}>Close</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-    </Modal>
-  );
-};
 
 const Player = () => {
   const navigation = useNavigation();
@@ -993,93 +856,6 @@ const styles = StyleSheet.create({
     height: 20,
     backgroundColor: "#ffffff",
     borderRadius: 2.5,
-  },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: "rgba(0, 0, 0, 0.8)",
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  modalContent: {
-    backgroundColor: "#1a1a1f",
-    borderRadius: 25,
-    padding: 25,
-    width: SCREEN_WIDTH * 0.9,
-    maxHeight: "70%",
-    borderWidth: 1,
-    borderColor: "rgba(255, 255, 255, 0.1)",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 20 },
-    shadowOpacity: 0.5,
-    shadowRadius: 25,
-    elevation: 25,
-  },
-  modalTitle: {
-    fontSize: 22,
-    fontWeight: "700",
-    color: "#ffffff",
-    textAlign: "center",
-    marginBottom: 25,
-    letterSpacing: 0.5,
-  },
-  playlistsList: {
-    maxHeight: 200,
-    marginBottom: 25,
-  },
-  playlistItem: {
-    padding: 18,
-    borderBottomWidth: 1,
-    borderBottomColor: "rgba(255, 255, 255, 0.1)",
-    borderRadius: 12,
-    marginBottom: 8,
-    backgroundColor: "rgba(255, 255, 255, 0.05)",
-  },
-  playlistName: {
-    fontSize: 17,
-    color: "#ffffff",
-    fontWeight: "500",
-    letterSpacing: 0.3,
-  },
-  newPlaylistSection: {
-    marginBottom: 25,
-  },
-  newPlaylistTitle: {
-    fontSize: 17,
-    fontWeight: "600",
-    color: "#ffffff",
-    marginBottom: 15,
-    letterSpacing: 0.3,
-  },
-  createPlaylistButton: {
-    backgroundColor: "rgba(255, 0, 255, 0.9)",
-    padding: 18,
-    borderRadius: 15,
-    alignItems: "center",
-    shadowColor: "#ff00ff",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 8,
-  },
-  createPlaylistText: {
-    color: "#ffffff",
-    fontSize: 17,
-    fontWeight: "600",
-    letterSpacing: 0.5,
-  },
-  closeButton: {
-    backgroundColor: "rgba(255, 255, 255, 0.1)",
-    padding: 18,
-    borderRadius: 15,
-    alignItems: "center",
-    borderWidth: 1,
-    borderColor: "rgba(255, 255, 255, 0.2)",
-  },
-  closeButtonText: {
-    color: "#888",
-    fontSize: 17,
-    fontWeight: "500",
-    letterSpacing: 0.3,
   },
 });
 

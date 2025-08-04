@@ -191,6 +191,123 @@ const NotificationsPage: React.FC<NotificationsPageProps> = ({ onClose }) => {
     }
   };
 
+  // Handle artist show invitation acceptance
+  const handleArtistShowInvitationAccept = async (notification: Notification) => {
+    try {
+      if (!notification.notification_data?.show_id) {
+        Alert.alert('Error', 'Invalid show invitation');
+        return;
+      }
+
+      setLoading(true);
+
+      // Get the show data
+      const { data: showData, error: showError } = await supabase
+        .from('shows')
+        .select('*')
+        .eq('show_id', notification.notification_data.show_id)
+        .single();
+
+      if (showError || !showData) {
+        Alert.alert('Error', 'Could not find show information');
+        return;
+      }
+
+      // Update show_members to accept
+      const updatedMembers = showData.show_members.map((member: any) => {
+        if (member.show_member_id === notification.notification_recipient && member.show_member_type === 'artist') {
+          return { ...member, show_member_decision: true };
+        }
+        return member;
+      });
+
+      // Update the show
+      const { error: updateError } = await supabase
+        .from('shows')
+        .update({ show_members: updatedMembers })
+        .eq('show_id', notification.notification_data.show_id);
+
+      if (updateError) {
+        Alert.alert('Error', 'Could not update show status');
+        return;
+      }
+
+      // Mark notification as handled
+      await supabase
+        .from('notifications')
+        .update({ action_required: false, is_read: true })
+        .eq('notification_id', notification.notification_id);
+
+      // Get accepting artist's info
+      const { data: artistData } = await supabase
+        .from('artists')
+        .select('artist_name')
+        .eq('artist_id', notification.notification_recipient)
+        .single();
+
+      const artistName = artistData?.artist_name || 'Artist';
+
+      // Send acceptance notification to promoter
+      if (showData.show_promoter !== notification.notification_recipient) {
+        await notificationService.createArtistShowAcceptanceNotification(
+          notification.notification_recipient,
+          artistName,
+          showData.show_promoter,
+          notification.notification_data.show_id,
+          {
+            venue_name: notification.notification_data.venue_name,
+            preferred_date: notification.notification_data.preferred_date,
+            preferred_time: notification.notification_data.preferred_time
+          }
+        );
+      }
+
+      // Check if show should be activated
+      const activationResult = await notificationService.checkAndActivateShow(notification.notification_data.show_id);
+      if (activationResult.activated) {
+        Alert.alert('Success', 'You have accepted the show invitation! The show is now ACTIVE!');
+      } else {
+        Alert.alert('Success', 'You have accepted the show invitation!');
+      }
+      fetchNotifications();
+    } catch (error) {
+      console.error('Error accepting show invitation:', error);
+      Alert.alert('Error', 'Could not accept invitation');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Handle artist show invitation rejection
+  const handleArtistShowInvitationReject = async (notification: Notification) => {
+    try {
+      Alert.alert(
+        'Reject Invitation',
+        'Are you sure you want to reject this show invitation?',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Reject',
+            style: 'destructive',
+            onPress: async () => {
+              // Mark notification as handled
+              await supabase
+                .from('notifications')
+                .update({ action_required: false, is_read: true })
+                .eq('notification_id', notification.notification_id);
+              
+              Alert.alert('Success', 'Show invitation declined');
+              fetchNotifications();
+            }
+          }
+        ]
+      );
+    } catch (error) {
+      console.error('Error rejecting show invitation:', error);
+      Alert.alert('Error', 'Could not reject invitation');
+    }
+  };
+
   const onRefresh = () => {
     setRefreshing(true);
     fetchNotifications();
@@ -649,150 +766,7 @@ const NotificationsPage: React.FC<NotificationsPageProps> = ({ onClose }) => {
     }
   };
 
-  // Handle artist show invitation accept
-  const handleArtistShowInvitationAccept = async (notification: Notification) => {
-    try {
-      if (!notification.notification_data?.show_id) {
-        Alert.alert('Error', 'Invalid show invitation');
-        return;
-      }
 
-      setLoading(true);
-
-      // Get the show data
-      const { data: showData, error: showError } = await supabase
-        .from('shows')
-        .select('*')
-        .eq('show_id', notification.notification_data.show_id)
-        .single();
-
-      if (showError || !showData) {
-        Alert.alert('Error', 'Could not find show information');
-        return;
-      }
-
-      // Update show_members to accept
-      const updatedMembers = showData.show_members.map((member: any) => {
-        if (member.show_member_id === notification.notification_recipient && member.show_member_type === 'artist') {
-          return { ...member, show_member_decision: true };
-        }
-        return member;
-      });
-
-      // Update the show
-      const { error: updateError } = await supabase
-        .from('shows')
-        .update({ show_members: updatedMembers })
-        .eq('show_id', notification.notification_data.show_id);
-
-      if (updateError) {
-        Alert.alert('Error', 'Could not update show status');
-        return;
-      }
-
-      // Mark notification as handled
-      await supabase
-        .from('notifications')
-        .update({ action_required: false, is_read: true })
-        .eq('notification_id', notification.notification_id);
-
-      // Get accepting artist's info
-      const { data: artistData } = await supabase
-        .from('artists')
-        .select('artist_name')
-        .eq('artist_id', notification.notification_recipient)
-        .single();
-
-      const acceptingArtistName = artistData?.artist_name || 'An artist';
-
-      // Send acceptance notifications to all other show participants
-      const recipientIds = new Set<string>();
-      
-      // Add promoter
-      recipientIds.add(showData.show_promoter);
-      
-      // Add venue spotter_id
-      const { data: venueData } = await supabase
-        .from('venues')
-        .select('spotter_id')
-        .eq('venue_id', showData.show_venue)
-        .single();
-      
-      if (venueData?.spotter_id) {
-        recipientIds.add(venueData.spotter_id);
-      }
-
-      // Add all other show members
-      for (const member of showData.show_members) {
-        if (member.show_member_type === 'artist' && member.show_member_id !== notification.notification_recipient) {
-          recipientIds.add(member.show_member_id);
-        } else if (member.show_member_type === 'band' && member.show_member_consensus) {
-          for (const bandMember of member.show_member_consensus) {
-            recipientIds.add(bandMember.show_band_member_id);
-          }
-        }
-      }
-
-      // Send notifications
-      for (const recipientId of recipientIds) {
-        await notificationService.createArtistShowAcceptanceNotification(
-          notification.notification_recipient,
-          acceptingArtistName,
-          recipientId,
-          showData.show_id,
-          {
-            venue_name: notification.notification_data.venue_name,
-            preferred_date: notification.notification_data.preferred_date,
-            preferred_time: notification.notification_data.preferred_time
-          }
-        );
-      }
-
-      // Check if show should be activated
-      const activationResult = await notificationService.checkAndActivateShow(notification.notification_data.show_id);
-      if (activationResult.activated) {
-        Alert.alert('Success', 'You have accepted the show invitation! The show is now ACTIVE!');
-      } else {
-        Alert.alert('Success', 'You have accepted the show invitation!');
-      }
-      fetchNotifications();
-    } catch (error) {
-      console.error('Error accepting show invitation:', error);
-      Alert.alert('Error', 'Could not accept invitation');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Handle artist show invitation reject
-  const handleArtistShowInvitationReject = async (notification: Notification) => {
-    try {
-      Alert.alert(
-        'Reject Invitation',
-        'Are you sure you want to reject this show invitation?',
-        [
-          { text: 'Cancel', style: 'cancel' },
-          {
-            text: 'Reject',
-            style: 'destructive',
-            onPress: async () => {
-              // Mark notification as handled
-              await supabase
-                .from('notifications')
-                .update({ action_required: false, is_read: true })
-                .eq('notification_id', notification.notification_id);
-
-              Alert.alert('Success', 'You have declined the show invitation');
-              fetchNotifications();
-            },
-          },
-        ]
-      );
-    } catch (error) {
-      console.error('Error rejecting show invitation:', error);
-      Alert.alert('Error', 'Could not reject invitation');
-    }
-  };
 
   // Handle band member show invitation accept
   const handleBandMemberShowInvitationAccept = async (notification: Notification) => {

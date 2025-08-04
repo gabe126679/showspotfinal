@@ -10,6 +10,7 @@ import {
 import { LinearGradient } from 'expo-linear-gradient';
 import QRCode from 'react-native-qrcode-svg';
 import { TicketWithShow } from '../services/ticketService';
+import { formatShowDate } from '../utils/dateUtils';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -27,8 +28,7 @@ const QRCodeModal: React.FC<QRCodeModalProps> = ({
   if (!ticket) return null;
 
   const formatDate = (dateString?: string) => {
-    if (!dateString) return 'Date TBD';
-    return new Date(dateString).toLocaleDateString();
+    return formatShowDate(dateString);
   };
 
   const formatTime = (timeString?: string) => {
@@ -84,7 +84,7 @@ const QRCodeModal: React.FC<QRCodeModalProps> = ({
                 Ticket ID: {ticket.ticket_id.slice(0, 8)}...
               </Text>
               <Text style={styles.detailText}>
-                Purchased: {new Date(ticket.created_at).toLocaleDateString()}
+                Purchased: {formatShowDate(ticket.created_at)}
               </Text>
             </View>
 

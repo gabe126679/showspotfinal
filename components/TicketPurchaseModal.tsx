@@ -15,6 +15,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { supabase } from '../lib/supabase';
 import { ticketService } from '../services/ticketService';
 import { v4 as uuidv4 } from 'uuid';
+import { formatShowDate } from '../utils/dateUtils';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -195,10 +196,13 @@ const TicketPurchaseModal: React.FC<TicketPurchaseModalProps> = ({
       }
 
       // Add purchaser to show
+      console.log('About to add purchaser to show:', { show_id: showData.show_id, user_id: currentUser.id });
       const showResult = await ticketService.addPurchaserToShow(showData.show_id, currentUser.id);
       if (!showResult.success) {
-        console.error('Error adding purchaser to show:', showResult.error);
-        // Don't fail the entire process for this
+        console.error('❌ FAILED to add purchaser to show:', showResult.error);
+        Alert.alert('Warning', 'Ticket purchased but show count may not update immediately');
+      } else {
+        console.log('✅ Successfully added purchaser to show');
       }
 
       // Success!
@@ -272,7 +276,7 @@ const TicketPurchaseModal: React.FC<TicketPurchaseModalProps> = ({
               <Text style={styles.showTitle}>{showData?.title || 'Show'}</Text>
               {showData?.show_date && (
                 <Text style={styles.showDetails}>
-                  {new Date(showData.show_date).toLocaleDateString()}
+                  {formatShowDate(showData.show_date)}
                   {showData.show_time && ` at ${showData.show_time}`}
                 </Text>
               )}

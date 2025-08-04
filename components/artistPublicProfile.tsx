@@ -14,6 +14,7 @@ import {
   Platform,
   Vibration,
   Modal,
+  Alert,
 } from "react-native";
 import { PanGestureHandler, State } from 'react-native-gesture-handler';
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -23,7 +24,16 @@ import { supabase } from "../lib/supabase";
 import { LinearGradient } from "expo-linear-gradient";
 import { useMusicPlayer } from "./player";
 import ShowSpotHeader from "./ShowSpotHeader";
+import TicketPurchaseModal from "./TicketPurchaseModal";
 import SongPurchaseModal from "./SongPurchaseModal";
+import AlbumPurchaseModal from "./AlbumPurchaseModal";
+import ShowVoteButton from "./ShowVoteButton";
+import RatingModal from "./RatingModal";
+import { ratingService, RatingInfo } from '../services/ratingService';
+import { followerService, FollowerInfo } from '../services/followerService';
+import TipModal from "./TipModal";
+import { formatShowDateTime } from '../utils/showDateDisplay';
+import { albumService, Album } from '../services/albumService';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get("window");
 // iPhone 16 specific dimensions for gesture positioning - matching profile.tsx exactly
@@ -104,10 +114,34 @@ const ArtistPublicProfile: React.FC<ArtistPublicProfileProps> = ({ route }) => {
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [isOwner, setIsOwner] = useState(false);
   
+  // Shows data states
+  const [activeShows, setActiveShows] = useState<any[]>([]);
+  const [pendingShows, setPendingShows] = useState<any[]>([]);
+  const [performedShows, setPerformedShows] = useState<any[]>([]);
+  const [bands, setBands] = useState<any[]>([]);
+  
+  // Albums data
+  const [albums, setAlbums] = useState<Album[]>([]);
+  
+  // Rating states
+  const [showRatingModal, setShowRatingModal] = useState(false);
+  const [ratingInfo, setRatingInfo] = useState<RatingInfo | null>(null);
+  
+  // Follower states
+  const [followerInfo, setFollowerInfo] = useState<FollowerInfo | null>(null);
+  const [isFollowing, setIsFollowing] = useState(false);
+  
+  // Tip states
+  const [showTipModal, setShowTipModal] = useState(false);
+  
   // Common states - matching profile.tsx exactly
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState(false);
+  
+  // Modal states
+  const [showTicketModal, setShowTicketModal] = useState(false);
+  const [selectedShow, setSelectedShow] = useState<any>(null);
   
   // Full-screen image modal - matching profile.tsx exactly
   const [showImageModal, setShowImageModal] = useState(false);
@@ -117,10 +151,37 @@ const ArtistPublicProfile: React.FC<ArtistPublicProfileProps> = ({ route }) => {
   const [showSongModal, setShowSongModal] = useState(false);
   const [selectedSong, setSelectedSong] = useState<any>(null);
   
+  // Album purchase modal
+  const [showAlbumModal, setShowAlbumModal] = useState(false);
+  const [selectedAlbum, setSelectedAlbum] = useState<Album | null>(null);
+  
   // Handle image press for full-screen view
   const handleImagePress = (imageUri: string) => {
     setSelectedImage(imageUri);
     setShowImageModal(true);
+  };
+
+  // Handle ticket purchase
+  const handleTicketPurchase = (show: any) => {
+    console.log('handleTicketPurchase called with show:', show);
+    
+    if (!show) {
+      console.error('Show data is null or undefined');
+      return;
+    }
+    
+    const showDataForModal = {
+      show_id: show.show_id,
+      title: show.title || 'Unknown Show',
+      ticket_price: parseFloat(show.ticket_price) || 0,
+      show_date: show.show_date,
+      show_time: show.show_time,
+      venue_name: show.venue_name || 'Unknown Venue',
+    };
+    
+    console.log('Setting showData for modal:', showDataForModal);
+    setSelectedShow(showDataForModal);
+    setShowTicketModal(true);
   };
 
   // Handle song purchase
@@ -146,6 +207,33 @@ const ArtistPublicProfile: React.FC<ArtistPublicProfileProps> = ({ route }) => {
     console.log('Setting songData for modal:', songDataForModal);
     setSelectedSong(songDataForModal);
     setShowSongModal(true);
+  };
+
+  // Handle album purchase
+  const handleAlbumPurchase = (album: Album) => {
+    console.log('handleAlbumPurchase called with album:', album);
+    
+    if (!album) {
+      console.error('Album data is null or undefined');
+      return;
+    }
+    
+    setSelectedAlbum(album);
+    setShowAlbumModal(true);
+  };
+
+  const getImageUrl = (imagePath: string): string => {
+    if (!imagePath) return '';
+    
+    if (imagePath.startsWith('http')) {
+      return imagePath;
+    }
+
+    const { data } = supabase.storage
+      .from('song-images')
+      .getPublicUrl(imagePath);
+
+    return data.publicUrl;
   };
 
   // Tabs state
@@ -280,6 +368,66 @@ const ArtistPublicProfile: React.FC<ArtistPublicProfileProps> = ({ route }) => {
     );
   }, []);
 
+  // Fetch rating info for the artist
+  const fetchRatingInfo = async (artistId: string, userId?: string) => {
+    try {
+      const result = await ratingService.getRatingInfo(artistId, 'artist', userId);
+      if (result.success && result.data) {
+        setRatingInfo(result.data);
+      }
+    } catch (error) {
+      console.error('Error fetching rating info:', error);
+    }
+  };
+
+  // Handle rating button press
+  const handleRatingPress = () => {
+    if (!currentUser) {
+      Alert.alert('Not Logged In', 'Please log in to rate this artist.');
+      return;
+    }
+    setShowRatingModal(true);
+  };
+
+  // Handle rating submitted
+  const handleRatingSubmitted = (newRating: RatingInfo) => {
+    setRatingInfo(newRating);
+  };
+
+  // Fetch follower info for the artist
+  const fetchFollowerInfo = async (artistId: string, userId?: string) => {
+    try {
+      const result = await followerService.getFollowerInfo(artistId, 'artist', userId);
+      if (result.success && result.data) {
+        setFollowerInfo(result.data);
+        setIsFollowing(result.data.userIsFollowing);
+      }
+    } catch (error) {
+      console.error('Error fetching follower info:', error);
+    }
+  };
+
+  // Handle follow button press
+  const handleFollowPress = async () => {
+    if (!currentUser) {
+      Alert.alert('Not Logged In', 'Please log in to follow this artist.');
+      return;
+    }
+
+    try {
+      const result = await followerService.toggleFollow(artist_id, 'artist', currentUser.id);
+      if (result.success && result.data) {
+        setFollowerInfo(result.data);
+        setIsFollowing(result.data.userIsFollowing);
+      } else {
+        Alert.alert('Error', result.error || 'Failed to update follow status');
+      }
+    } catch (error) {
+      console.error('Error toggling follow:', error);
+      Alert.alert('Error', 'Failed to update follow status');
+    }
+  };
+
   // Fetch artist data
   const fetchArtistData = async () => {
     try {
@@ -347,6 +495,21 @@ const ArtistPublicProfile: React.FC<ArtistPublicProfileProps> = ({ route }) => {
         setSongs([]);
       }
 
+      // Fetch shows where this artist is a member
+      await fetchArtistShows(artist_id);
+      
+      // Fetch albums for this artist
+      await fetchArtistAlbums(artist_id);
+      
+      // Fetch bands this artist is a member of
+      await fetchArtistBands(artist_id);
+
+      // Fetch rating info for this artist
+      await fetchRatingInfo(artist_id, session?.user?.id);
+
+      // Fetch follower info for this artist
+      await fetchFollowerInfo(artist_id, session?.user?.id);
+
       // Fade in animation - matching bandPublicProfile.tsx
       Animated.timing(fadeAnim, {
         toValue: 1,
@@ -359,6 +522,152 @@ const ArtistPublicProfile: React.FC<ArtistPublicProfileProps> = ({ route }) => {
       setError(err.message || 'Failed to load artist data');
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Fetch shows where this artist is a member
+  const fetchArtistShows = async (artistId: string) => {
+    try {
+      console.log('🎭 Fetching shows for artist:', artistId);
+      
+      // Get shows for this artist (both pending and active)
+      const { data: shows, error: showsError } = await supabase
+        .from('shows')
+        .select(`
+          show_id,
+          show_members,
+          show_venue,
+          show_status,
+          venue_decision,
+          show_date,
+          show_time,
+          show_preferred_date,
+          show_preferred_time,
+          show_ticket_price,
+          created_at,
+          venues:show_venue (
+            venue_name,
+            venue_profile_image
+          )
+        `)
+        .in('show_status', ['pending', 'active', 'sold out']);
+
+      if (!showsError && shows) {
+        // Filter shows where this artist is a performer (either as solo artist or band member)
+        const artistShows = shows.filter(show => {
+          return show.show_members.some((member: any) => {
+            if (member.show_member_type === 'artist') {
+              return member.show_member_id === artistId;
+            } else if (member.show_member_type === 'band' && member.show_member_consensus) {
+              // Check if artist is in this band's consensus
+              return member.show_member_consensus.some((consensus: any) => 
+                consensus.show_band_member_id === artistId
+              );
+            }
+            return false;
+          });
+        });
+
+        // Separate shows by status
+        const pendingShowsList = artistShows.filter(show => show.show_status === 'pending');
+        const activeShowsList = artistShows.filter(show => show.show_status === 'active' || show.show_status === 'sold out');
+
+        // Format pending shows for display
+        const formattedPendingShows = pendingShowsList.map(show => {
+          const venueName = show.venues?.venue_name || 'TBD';
+          const venueImage = show.venues?.venue_profile_image;
+          
+          return {
+            show_id: show.show_id,
+            title: `Performance @ ${venueName}`,
+            venue_name: venueName,
+            venue_image: venueImage,
+            show_date: show.show_date || show.show_preferred_date,
+            show_time: show.show_time || show.show_preferred_time,
+            ticket_price: show.show_ticket_price,
+            venue_decision: show.venue_decision,
+            show_status: show.show_status,
+            created_at: show.created_at
+          };
+        });
+
+        // Format active shows for display
+        const formattedActiveShows = activeShowsList.map(show => {
+          const venueName = show.venues?.venue_name || 'TBD';
+          const venueImage = show.venues?.venue_profile_image;
+          
+          return {
+            show_id: show.show_id,
+            title: `Performance @ ${venueName}`,
+            venue_name: venueName,
+            venue_image: venueImage,
+            show_date: show.show_date || show.show_preferred_date,
+            show_time: show.show_time || show.show_preferred_time,
+            ticket_price: show.show_ticket_price,
+            venue_decision: show.venue_decision,
+            show_status: show.show_status,
+            created_at: show.created_at
+          };
+        });
+
+        setPendingShows(formattedPendingShows);
+        setActiveShows(formattedActiveShows);
+        setPerformedShows([]); // Will implement later if needed
+        
+        console.log('🎭 Artist shows categorized:', {
+          pending: formattedPendingShows.length,
+          active: formattedActiveShows.length
+        });
+      } else if (showsError) {
+        console.log('Shows query failed:', showsError);
+        setPendingShows([]);
+        setActiveShows([]);
+        setPerformedShows([]);
+      }
+    } catch (error) {
+      console.error('Error fetching artist shows:', error);
+    }
+  };
+
+  // Fetch bands this artist is a member of
+  const fetchArtistBands = async (artistId: string) => {
+    try {
+      console.log('🎸 Fetching bands for artist:', artistId);
+      
+      const { data: bands, error } = await supabase
+        .from('bands')
+        .select('*')
+        .contains('band_members', [artistId])
+        .order('created_at', { ascending: false });
+
+      if (error) {
+        console.error('Error fetching artist bands:', error);
+        return;
+      }
+
+      console.log('🎸 Found bands for artist:', bands?.length || 0);
+      setBands(bands || []);
+    } catch (error) {
+      console.error('Error fetching artist bands:', error);
+    }
+  };
+
+  const fetchArtistAlbums = async (artistId: string) => {
+    try {
+      console.log('💿 Fetching albums for artist:', artistId);
+      
+      const result = await albumService.getArtistAlbums(artistId);
+      
+      if (result.success && result.data) {
+        console.log('💿 Found albums for artist:', result.data.length);
+        setAlbums(result.data);
+      } else {
+        console.error('Error fetching artist albums:', result.error);
+        setAlbums([]);
+      }
+    } catch (error) {
+      console.error('Error fetching artist albums:', error);
+      setAlbums([]);
     }
   };
 
@@ -462,6 +771,238 @@ const ArtistPublicProfile: React.FC<ArtistPublicProfileProps> = ({ route }) => {
           </View>
         );
 
+      case 'albums':
+        return (
+          <View style={styles.tabContent}>
+            <ScrollView 
+              style={styles.albumsContainer}
+              showsVerticalScrollIndicator={false}
+              nestedScrollEnabled={true}
+            >
+              {albums.length > 0 ? (
+                albums.map((album) => (
+                  <View key={album.album_id} style={styles.albumItem}>
+                    <Image
+                      source={{ 
+                        uri: getImageUrl(album.album_image) || 'https://via.placeholder.com/80'
+                      }}
+                      style={styles.albumImage}
+                    />
+                    <View style={styles.albumInfo}>
+                      <Text style={styles.albumTitle}>{album.album_title}</Text>
+                      <Text style={styles.albumDetails}>
+                        {album.album_song_data?.length || 0} song{(album.album_song_data?.length || 0) !== 1 ? 's' : ''}
+                      </Text>
+                      <Text style={styles.albumPrice}>
+                        {album.album_price === '0' ? 'Free' : `$${album.album_price}`}
+                      </Text>
+                      {album.album_status === 'pending' && (
+                        <Text style={styles.albumPendingText}>Pending Approval</Text>
+                      )}
+                    </View>
+                    <TouchableOpacity
+                      style={styles.albumPurchaseButton}
+                      onPress={() => handleAlbumPurchase(album)}
+                      disabled={album.album_status !== 'active'}
+                    >
+                      <Text style={styles.albumPurchaseButtonText}>
+                        {album.album_price === '0' ? 'Download' : 'Buy'}
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+                ))
+              ) : (
+                <Text style={styles.noAlbumsText}>
+                  {isOwner 
+                    ? "No albums created yet. Create your first album!" 
+                    : "This artist hasn't released any albums yet."
+                  }
+                </Text>
+              )}
+            </ScrollView>
+          </View>
+        );
+
+      case 'activeShows':
+        return (
+          <View style={styles.tabContent}>
+            <ScrollView 
+              style={styles.showsContainer}
+              showsVerticalScrollIndicator={false}
+              nestedScrollEnabled={true}
+            >
+              {activeShows.length > 0 ? (
+                activeShows.map((show) => (
+                  <TouchableOpacity 
+                    key={show.show_id} 
+                    style={styles.showItem}
+                    onPress={() => navigation.navigate('ShowBill' as never, { show_id: show.show_id } as never)}
+                  >
+                    <Image
+                      source={{ 
+                        uri: show.venue_image || 'https://via.placeholder.com/50' 
+                      }}
+                      style={styles.showImage}
+                    />
+                    <View style={styles.showInfo}>
+                      <Text style={styles.showTitle}>{show.title}</Text>
+                      <Text style={styles.showDetails}>
+                        {show.show_date ? new Date(show.show_date).toLocaleDateString() : 'Date TBD'} 
+                        {show.show_time ? ` at ${show.show_time}` : ''}
+                      </Text>
+                      <Text style={[
+                        styles.showStatus,
+                        { color: show.show_status === 'sold out' ? '#dc3545' : '#28a745' }
+                      ]}>
+                        {show.show_status === 'sold out' ? 'SOLD OUT' : 'Active Show'}
+                      </Text>
+                      {show.ticket_price && (
+                        <View style={styles.ticketSection}>
+                          <Text style={styles.ticketPrice}>${show.ticket_price}</Text>
+                          {show.show_status !== 'sold out' ? (
+                            <TouchableOpacity 
+                              style={styles.buyTicketButton}
+                              onPress={(e) => {
+                                e.stopPropagation();
+                                handleTicketPurchase(show);
+                              }}
+                            >
+                              <Text style={styles.buyTicketText}>Buy Ticket</Text>
+                            </TouchableOpacity>
+                          ) : (
+                            <Text style={styles.soldOutText}>SOLD OUT</Text>
+                          )}
+                        </View>
+                      )}
+                    </View>
+                  </TouchableOpacity>
+                ))
+              ) : (
+                <Text style={styles.noShowsText}>No active shows</Text>
+              )}
+            </ScrollView>
+          </View>
+        );
+
+      case 'pendingShows':
+        return (
+          <View style={styles.tabContent}>
+            <ScrollView 
+              style={styles.showsContainer}
+              showsVerticalScrollIndicator={false}
+              nestedScrollEnabled={true}
+            >
+              {pendingShows.length > 0 ? (
+                pendingShows.map((show) => (
+                  <TouchableOpacity 
+                    key={show.show_id} 
+                    style={styles.showItem}
+                    onPress={() => navigation.navigate('ShowBill' as never, { show_id: show.show_id } as never)}
+                  >
+                    <Image
+                      source={{ 
+                        uri: show.venue_image || 'https://via.placeholder.com/50' 
+                      }}
+                      style={styles.showImage}
+                    />
+                    <View style={styles.showInfo}>
+                      <Text style={styles.showTitle}>{show.title}</Text>
+                      <Text style={styles.showDetails}>
+                        {show.show_date ? new Date(show.show_date).toLocaleDateString() : 'Date TBD'} 
+                        {show.show_time ? ` at ${show.show_time}` : ''}
+                      </Text>
+                      <Text style={[
+                        styles.showStatus,
+                        { color: show.venue_decision ? '#28a745' : '#ffc107' }
+                      ]}>
+                        {show.venue_decision ? 'Confirmed by Venue' : 'Pending Venue Approval'}
+                      </Text>
+                    </View>
+                    <View style={styles.voteSection}>
+                      <ShowVoteButton 
+                        showId={show.show_id}
+                        buttonStyle={styles.voteButton}
+                        textStyle={styles.voteButtonText}
+                        countStyle={styles.voteCountText}
+                      />
+                    </View>
+                  </TouchableOpacity>
+                ))
+              ) : (
+                <Text style={styles.noShowsText}>No pending shows</Text>
+              )}
+            </ScrollView>
+          </View>
+        );
+
+      case 'performedShows':
+        return (
+          <View style={styles.tabContent}>
+            <ScrollView 
+              style={styles.showsContainer}
+              showsVerticalScrollIndicator={false}
+              nestedScrollEnabled={true}
+            >
+              {performedShows.length > 0 ? (
+                performedShows.map((show) => (
+                  <TouchableOpacity 
+                    key={show.show_id} 
+                    style={styles.showItem}
+                    onPress={() => navigation.navigate('ShowBill' as never, { show_id: show.show_id } as never)}
+                  >
+                    <View style={styles.showInfo}>
+                      <Text style={styles.showTitle}>{show.venues?.venue_name || 'Unknown Venue'}</Text>
+                      <Text style={styles.showDate}>
+                        {formatShowDateTime(show.show_date, show.show_time, show.show_preferred_date, show.show_preferred_time)}
+                      </Text>
+                      <Text style={styles.showStatus}>Status: {show.show_status}</Text>
+                    </View>
+                    <Text style={styles.showArrow}>→</Text>
+                  </TouchableOpacity>
+                ))
+              ) : (
+                <Text style={styles.noShowsText}>No performed shows</Text>
+              )}
+            </ScrollView>
+          </View>
+        );
+
+      case 'bands':
+        return (
+          <View style={styles.tabContent}>
+            <ScrollView 
+              style={styles.bandsContainer}
+              showsVerticalScrollIndicator={false}
+              nestedScrollEnabled={true}
+            >
+              {bands.length > 0 ? (
+                bands.map((band) => (
+                  <TouchableOpacity 
+                    key={band.band_id} 
+                    style={styles.bandItem}
+                    onPress={() => navigation.navigate('BandPublicProfile' as never, { band_id: band.band_id } as never)}
+                  >
+                    <Image 
+                      source={{ uri: band.band_profile_picture || 'https://via.placeholder.com/60' }}
+                      style={styles.bandImage}
+                    />
+                    <View style={styles.bandInfo}>
+                      <Text style={styles.bandName}>{band.band_name}</Text>
+                      <Text style={styles.bandStatus}>Status: {band.band_status}</Text>
+                      <Text style={styles.bandMembers}>
+                        {band.band_members?.length || 0} members
+                      </Text>
+                    </View>
+                    <Text style={styles.bandArrow}>→</Text>
+                  </TouchableOpacity>
+                ))
+              ) : (
+                <Text style={styles.noBandsText}>Not a member of any bands</Text>
+              )}
+            </ScrollView>
+          </View>
+        );
+
       case 'info':
         return (
           <View style={styles.tabContent}>
@@ -511,6 +1052,9 @@ const ArtistPublicProfile: React.FC<ArtistPublicProfileProps> = ({ route }) => {
           onNotificationPress={() => {
             console.log('Notification pressed');
           }}
+          onMessagePress={() => {
+            navigation.navigate('MessagesPage' as never);
+          }}
         />
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color="#fff" />
@@ -533,6 +1077,9 @@ const ArtistPublicProfile: React.FC<ArtistPublicProfileProps> = ({ route }) => {
           onBackPress={() => navigation.goBack()}
           onNotificationPress={() => {
             console.log('Notification pressed');
+          }}
+          onMessagePress={() => {
+            navigation.navigate('MessagesPage' as never);
           }}
         />
         <View style={styles.errorContainer}>
@@ -563,6 +1110,9 @@ const ArtistPublicProfile: React.FC<ArtistPublicProfileProps> = ({ route }) => {
           onNotificationPress={() => {
             console.log('Notification pressed');
           }}
+          onMessagePress={() => {
+            navigation.navigate('MessagesPage' as never);
+          }}
         />
       </View>
 
@@ -579,13 +1129,18 @@ const ArtistPublicProfile: React.FC<ArtistPublicProfileProps> = ({ route }) => {
           >
             {currentData.images.length > 0 ? (
               currentData.images.map((imageUri, index) => (
-                <TouchableOpacity 
+                <View 
                   key={index}
                   style={styles.imageContainer}
-                  onPress={() => handleImagePress(imageUri)}
                 >
-                  <Image source={{ uri: imageUri }} style={styles.profileImage} />
-                </TouchableOpacity>
+                  <TouchableOpacity 
+                    style={styles.imageTouch}
+                    onPress={() => handleImagePress(imageUri)}
+                    activeOpacity={0.9}
+                  >
+                    <Image source={{ uri: imageUri }} style={styles.profileImage} />
+                  </TouchableOpacity>
+                </View>
               ))
             ) : (
               <View style={styles.imageContainer}>
@@ -597,16 +1152,18 @@ const ArtistPublicProfile: React.FC<ArtistPublicProfileProps> = ({ route }) => {
           </ScrollView>
           
           {/* Follow button at top right */}
-          <TouchableOpacity style={styles.followButton}>
+          <TouchableOpacity style={styles.followButton} onPress={handleFollowPress}>
             <LinearGradient
-              colors={["#ff00ff", "#2a2882"]}
+              colors={isFollowing ? ["#4CAF50", "#45a049"] : ["#ff00ff", "#2a2882"]}
               style={styles.followButtonGradient}
             >
               <Image 
                 source={require('../assets/follow.png')} 
-                style={styles.followIcon}
+                style={[styles.followIcon, isFollowing && styles.followingIcon]}
               />
-              <Text style={styles.followCount}>2.3K</Text>
+              <Text style={styles.followCount}>
+                {followerInfo ? followerInfo.followerCount : 0}
+              </Text>
             </LinearGradient>
           </TouchableOpacity>
         </View>
@@ -628,17 +1185,51 @@ const ArtistPublicProfile: React.FC<ArtistPublicProfileProps> = ({ route }) => {
             </LinearGradient>
           </View>
           
-          {/* Rating on bottom right */}
-          <View style={styles.ratingContainer}>
-            <LinearGradient
-              colors={["rgba(0, 0, 0, 0.8)", "rgba(0, 0, 0, 0.4)"]}
-              style={styles.ratingBackground}
-            >
-              <Text style={styles.ratingText}>★★★★☆</Text>
-              <Text style={styles.reviewText}>4.2 (127 reviews)</Text>
-            </LinearGradient>
-          </View>
         </Animated.View>
+
+        {/* Rating button - positioned separately for better touch handling */}
+        <TouchableOpacity 
+          style={styles.ratingButton} 
+          onPress={handleRatingPress}
+          activeOpacity={0.7}
+        >
+          <LinearGradient
+            colors={["rgba(0, 0, 0, 0.8)", "rgba(0, 0, 0, 0.4)"]}
+            style={styles.ratingBackground}
+          >
+            <Text style={styles.ratingText}>
+              {ratingInfo ? 
+                '★'.repeat(Math.round(ratingInfo.currentRating)) + 
+                '☆'.repeat(5 - Math.round(ratingInfo.currentRating))
+                : '★★★★★'
+              }
+            </Text>
+            <Text style={styles.reviewText}>
+              {ratingInfo ? 
+                `${ratingInfo.currentRating.toFixed(1)} (${ratingInfo.totalRaters} review${ratingInfo.totalRaters !== 1 ? 's' : ''})`
+                : '5.0 (0 reviews)'
+              }
+            </Text>
+          </LinearGradient>
+        </TouchableOpacity>
+
+        {/* Tip button - positioned next to rating button */}
+        {!isOwner && (
+          <Animated.View style={[styles.tipButtonContainer, { opacity: nameOpacity }]}>
+            <TouchableOpacity 
+              style={styles.tipButtonOverlay} 
+              onPress={() => setShowTipModal(true)}
+              activeOpacity={0.7}
+            >
+              <LinearGradient
+                colors={["rgba(0, 0, 0, 0.8)", "rgba(0, 0, 0, 0.4)"]}
+                style={styles.tipButtonBackground}
+              >
+                <Text style={styles.tipButtonText}>+</Text>
+              </LinearGradient>
+            </TouchableOpacity>
+          </Animated.View>
+        )}
 
         {/* Sliding panel - matching bandPublicProfile.tsx exactly */}
         <Animated.View
@@ -727,6 +1318,46 @@ const ArtistPublicProfile: React.FC<ArtistPublicProfileProps> = ({ route }) => {
           console.log('Song purchased successfully');
         }}
       />
+
+      {/* Ticket Purchase Modal */}
+      <TicketPurchaseModal
+        visible={showTicketModal}
+        onClose={() => setShowTicketModal(false)}
+        showData={selectedShow}
+        onPurchaseSuccess={() => {
+          // Refresh shows data after purchase
+          fetchArtistData();
+        }}
+      />
+
+      {/* Album Purchase Modal */}
+      <AlbumPurchaseModal
+        visible={showAlbumModal}
+        onClose={() => setShowAlbumModal(false)}
+        album={selectedAlbum}
+        onPurchaseComplete={() => {
+          // Refresh after purchase
+          console.log('Album purchased successfully');
+        }}
+      />
+
+      {/* Rating Modal */}
+      <RatingModal
+        visible={showRatingModal}
+        onClose={() => setShowRatingModal(false)}
+        entityId={artist_id}
+        entityType="artist"
+        entityName={artistData?.artist_name || 'Artist'}
+        onRatingSubmitted={handleRatingSubmitted}
+      />
+
+      <TipModal
+        visible={showTipModal}
+        onClose={() => setShowTipModal(false)}
+        recipientId={artist_id}
+        recipientType="artist"
+        recipientName={artistData?.artist_name || 'Artist'}
+      />
     </View>
   );
 };
@@ -795,6 +1426,10 @@ const styles = StyleSheet.create({
   imageContainer: {
     width: SCREEN_WIDTH,
     height: IMAGE_SECTION_HEIGHT,
+  },
+  imageTouch: {
+    width: '100%',
+    height: '100%',
   },
   profileImage: {
     width: '100%',
@@ -1038,11 +1673,12 @@ const styles = StyleSheet.create({
     fontFamily: 'Audiowide-Regular',
     color: '#fff',
   },
-  ratingContainer: {
+  ratingButton: {
     position: 'absolute',
     bottom: 140, // Position above the collapsed tabs panel
     right: 20,
-    zIndex: 10,
+    zIndex: 1000, // High z-index to ensure it's above image touch areas
+    elevation: 10, // Android shadow/elevation
   },
   ratingBackground: {
     paddingHorizontal: 12,
@@ -1059,6 +1695,32 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#fff',
     fontFamily: 'Amiko-Regular',
+  },
+  // Tip button styles
+  tipButtonContainer: {
+    position: 'absolute',
+    bottom: 140, // Same as rating button
+    left: 20, // Position on the left side
+    zIndex: 1000,
+    elevation: 10,
+  },
+  tipButtonOverlay: {
+    // Container for touch handling
+  },
+  tipButtonBackground: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minWidth: 40,
+    minHeight: 40,
+  },
+  tipButtonText: {
+    fontSize: 20,
+    color: '#fff',
+    fontWeight: 'bold',
+    textAlign: 'center',
   },
   nameRatingOverlay: {
     position: 'absolute',
@@ -1168,11 +1830,270 @@ const styles = StyleSheet.create({
     tintColor: '#fff',
     marginBottom: 4,
   },
+  followingIcon: {
+    tintColor: '#fff',
+  },
   followCount: {
     fontSize: 14,
     fontFamily: 'Amiko-Regular',
     color: '#fff',
     fontWeight: '600',
+  },
+  // Shows styles
+  showsContainer: {
+    flex: 1,
+  },
+  showItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 12,
+    paddingHorizontal: 15,
+    backgroundColor: '#f8f9fa',
+    marginBottom: 8,
+    borderRadius: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  showInfo: {
+    flex: 1,
+    marginRight: 10,
+  },
+  showTitle: {
+    fontSize: 16,
+    fontFamily: 'Amiko-Regular',
+    color: '#333',
+    fontWeight: '600',
+    marginBottom: 4,
+  },
+  showDate: {
+    fontSize: 14,
+    fontFamily: 'Amiko-Regular',
+    color: '#666',
+    marginBottom: 2,
+  },
+  showStatus: {
+    fontSize: 12,
+    fontFamily: 'Amiko-Regular',
+    color: '#2a2882',
+    fontWeight: '600',
+  },
+  showArrow: {
+    fontSize: 18,
+    color: '#2a2882',
+    fontWeight: 'bold',
+  },
+  noShowsText: {
+    fontSize: 16,
+    fontFamily: 'Amiko-Regular',
+    color: '#666',
+    textAlign: 'center',
+    fontStyle: 'italic',
+    paddingVertical: 20,
+  },
+  // Bands styles
+  bandsContainer: {
+    flex: 1,
+  },
+  bandItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 15,
+    backgroundColor: '#f8f9fa',
+    marginBottom: 8,
+    borderRadius: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  bandImage: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    marginRight: 15,
+  },
+  bandInfo: {
+    flex: 1,
+    marginRight: 10,
+  },
+  bandName: {
+    fontSize: 16,
+    fontFamily: 'Amiko-Regular',
+    color: '#333',
+    fontWeight: '600',
+    marginBottom: 4,
+  },
+  bandStatus: {
+    fontSize: 14,
+    fontFamily: 'Amiko-Regular',
+    color: '#666',
+    marginBottom: 2,
+  },
+  bandMembers: {
+    fontSize: 12,
+    fontFamily: 'Amiko-Regular',
+    color: '#999',
+  },
+  bandArrow: {
+    fontSize: 18,
+    color: '#2a2882',
+    fontWeight: 'bold',
+  },
+  noBandsText: {
+    fontSize: 16,
+    fontFamily: 'Amiko-Regular',
+    color: '#666',
+    textAlign: 'center',
+    fontStyle: 'italic',
+    paddingVertical: 20,
+  },
+  // Show display styles
+  showImage: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    marginRight: 15,
+  },
+  showDetails: {
+    fontSize: 14,
+    fontFamily: 'Amiko-Regular',
+    color: '#666',
+    marginBottom: 2,
+  },
+  ticketSection: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 8,
+  },
+  ticketPrice: {
+    fontSize: 14,
+    fontFamily: 'Amiko-Regular',
+    color: '#28a745',
+    fontWeight: '600',
+    marginRight: 10,
+  },
+  buyTicketButton: {
+    backgroundColor: '#ff00ff',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 15,
+  },
+  buyTicketText: {
+    color: '#fff',
+    fontSize: 12,
+    fontFamily: 'Amiko-Regular',
+    fontWeight: '600',
+  },
+  soldOutText: {
+    color: '#dc3545',
+    fontSize: 12,
+    fontFamily: 'Amiko-Regular',
+    fontWeight: '600',
+  },
+  
+  // Album styles
+  albumsContainer: {
+    maxHeight: 400,
+  },
+  albumItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 15,
+    paddingHorizontal: 15,
+    backgroundColor: '#fff',
+    marginBottom: 10,
+    borderRadius: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  albumImage: {
+    width: 80,
+    height: 80,
+    borderRadius: 8,
+    marginRight: 15,
+    backgroundColor: '#f0f0f0',
+  },
+  albumInfo: {
+    flex: 1,
+    justifyContent: 'center',
+  },
+  albumTitle: {
+    fontSize: 16,
+    fontFamily: 'Amiko-Regular',
+    color: '#333',
+    fontWeight: '600',
+    marginBottom: 4,
+  },
+  albumDetails: {
+    fontSize: 14,
+    fontFamily: 'Amiko-Regular',
+    color: '#666',
+    marginBottom: 2,
+  },
+  albumPrice: {
+    fontSize: 14,
+    fontFamily: 'Amiko-Regular',
+    color: '#28a745',
+    fontWeight: '600',
+  },
+  albumPendingText: {
+    fontSize: 12,
+    fontFamily: 'Amiko-Regular',
+    color: '#ffc107',
+    fontWeight: '600',
+    marginTop: 2,
+  },
+  albumPurchaseButton: {
+    backgroundColor: '#ff00ff',
+    paddingHorizontal: 20,
+    paddingVertical: 8,
+    borderRadius: 20,
+    minWidth: 80,
+    alignItems: 'center',
+  },
+  albumPurchaseButtonText: {
+    color: '#fff',
+    fontSize: 14,
+    fontFamily: 'Amiko-Regular',
+    fontWeight: '600',
+  },
+  noAlbumsText: {
+    fontSize: 16,
+    fontFamily: 'Amiko-Regular',
+    color: '#666',
+    textAlign: 'center',
+    fontStyle: 'italic',
+    paddingVertical: 20,
+  },
+  
+  // Vote section styles
+  voteSection: {
+    marginLeft: 10,
+    justifyContent: 'center',
+  },
+  voteButton: {
+    backgroundColor: '#ff00ff',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 15,
+    minWidth: 70,
+  },
+  voteButtonText: {
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  voteCountText: {
+    fontSize: 10,
+    color: '#666',
   },
 });
 

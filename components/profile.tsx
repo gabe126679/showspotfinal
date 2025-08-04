@@ -24,6 +24,28 @@ import { LinearGradient } from "expo-linear-gradient";
 import SongUploadForm from "./SongUploadForm";
 import { useMusicPlayer } from "./player";
 import { songPurchaseService, SongPurchase } from "../services/songPurchaseService";
+import { ticketService, TicketWithShow } from "../services/ticketService";
+import QRCodeModal from "./QRCodeModal";
+import { formatShowDate } from '../utils/dateUtils';
+import { playlistService, Playlist } from "../services/playlistService";
+import PlaylistCreationModal from "./PlaylistCreationModal";
+import { albumService, Album, AlbumPurchase } from "../services/albumService";
+import AlbumCreationModal from "./AlbumCreationModal";
+
+// Helper function to get proper image URL from Supabase storage
+const getImageUrl = (imagePath: string): string => {
+  if (!imagePath) return '';
+  
+  if (imagePath.startsWith('http')) {
+    return imagePath;
+  }
+
+  const { data } = supabase.storage
+    .from('song-images')
+    .getPublicUrl(imagePath);
+
+  return data.publicUrl;
+};
 
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get("window");
@@ -65,6 +87,7 @@ const SPOTTER_TABS: TabData[] = [
   { id: "promoted", title: "promoted shows", expanded: false },
   { id: "attended", title: "attended shows", expanded: false },
   { id: "purchased", title: "purchased songs", expanded: false },
+  { id: "purchasedAlbums", title: "purchased albums", expanded: false },
   { id: "playlists", title: "playlists", expanded: false },
   { id: "artists", title: "favorite artists", expanded: false },
   { id: "bands", title: "favorite bands", expanded: false },
@@ -112,11 +135,42 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
   // Full-screen image modal
   const [showImageModal, setShowImageModal] = useState(false);
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
+  const [selectedImageIndex, setSelectedImageIndex] = useState<number>(0);
+  
+  // QR code modal
+  const [showQRModal, setShowQRModal] = useState(false);
+  const [selectedTicket, setSelectedTicket] = useState<TicketWithShow | null>(null);
+
+  // Playlist creation modal
+  const [showPlaylistModal, setShowPlaylistModal] = useState(false);
+  
+  // Album creation modal
+  const [showAlbumModal, setShowAlbumModal] = useState(false);
   
   // Handle image press for full-screen view
-  const handleImagePress = (imageUri: string) => {
+  const handleImagePress = (imageUri: string, index: number = 0) => {
     setSelectedImage(imageUri);
+    setSelectedImageIndex(index);
     setShowImageModal(true);
+  };
+
+  // Handle edit profile images
+  const handleEditImages = () => {
+    setShowImageModal(false);
+    // Navigate based on active profile type
+    if (activeProfile === 'spotter') {
+      navigation.navigate('Picture' as never);
+    } else if (activeProfile === 'artist') {
+      navigation.navigate('ArtistPicture' as never);
+    } else if (activeProfile === 'venue') {
+      navigation.navigate('VenuePicture' as never);
+    }
+  };
+
+  // Handle ticket press to show QR code
+  const handleTicketPress = (ticket: TicketWithShow) => {
+    setSelectedTicket(ticket);
+    setShowQRModal(true);
   };
   
   // Spotter data
@@ -146,8 +200,26 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
   // Bands data
   const [bands, setBands] = useState<any[]>([]);
 
+  // Shows data states
+  const [activeShows, setActiveShows] = useState<any[]>([]);
+  const [pendingShows, setPendingShows] = useState<any[]>([]);
+
   // Purchased songs data
   const [purchasedSongs, setPurchasedSongs] = useState<SongPurchase[]>([]);
+  
+  // Playlists data
+  const [playlists, setPlaylists] = useState<Playlist[]>([]);
+  const [expandedPlaylists, setExpandedPlaylists] = useState<Set<string>>(new Set());
+  
+  // Albums data
+  const [albums, setAlbums] = useState<Album[]>([]);
+  const [expandedAlbums, setExpandedAlbums] = useState<Set<string>>(new Set());
+  
+  // Purchased albums data
+  const [purchasedAlbums, setPurchasedAlbums] = useState<AlbumPurchase[]>([]);
+  
+  // Tickets data
+  const [tickets, setTickets] = useState<TicketWithShow[]>([]);
 
   // Animation refs
   const panelTranslateY = useRef(new Animated.Value(COLLAPSED_TRANSLATE_Y)).current;
@@ -239,6 +311,12 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
             setArtistData(artistInfo);
             setIsOwner(true);
 
+            // Fetch shows for this artist
+            await fetchArtistShows(artistInfo.artist_id);
+
+            // Fetch albums for this artist
+            await fetchAlbums(artistInfo.artist_id, 'artist');
+
             // Fetch bands for this artist
             const { data: artistBands, error: bandsError } = await supabase
               .from("bands")
@@ -247,6 +325,13 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
 
             if (!bandsError && artistBands) {
               setBands(artistBands);
+              // If artist is part of bands, also fetch band albums
+              for (const band of artistBands) {
+                const bandAlbumsResult = await albumService.getBandAlbums(band.band_id);
+                if (bandAlbumsResult.success && bandAlbumsResult.data) {
+                  setAlbums(prev => [...prev, ...bandAlbumsResult.data!]);
+                }
+              }
             }
           }
         }
@@ -264,11 +349,23 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
             setVenueID(venueInfo.venue_id);
             setVenueData(venueInfo);
             setIsOwner(true);
+
+            // Fetch shows for this venue
+            await fetchVenueShows(venueInfo.venue_id);
           }
         }
 
         // Fetch purchased songs for spotter profile
         await fetchPurchasedSongs(userId);
+        
+        // Fetch playlists for spotter profile
+        await fetchPlaylists(userId);
+        
+        // Fetch purchased albums for spotter profile
+        await fetchPurchasedAlbums(userId);
+        
+        // Fetch tickets for spotter profile
+        await fetchTickets(userId);
 
         // Fade in animation
         Animated.timing(fadeAnim, {
@@ -289,17 +386,179 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
 
   const fetchPurchasedSongs = async (userId: string) => {
     try {
+      console.log('Profile - Fetching purchased songs for user:', userId);
       const result = await songPurchaseService.getUserPurchasedSongs(userId);
+      console.log('Profile - Purchase service result:', result);
+      
       if (result.success && result.songs) {
         setPurchasedSongs(result.songs);
-        console.log('Purchased songs loaded:', result.songs.length);
+        console.log('Profile - Purchased songs loaded:', result.songs.length);
+        if (result.songs.length > 0) {
+          console.log('Profile - First song example:', result.songs[0]);
+        }
       } else {
-        console.error('Error fetching purchased songs:', result.error);
+        console.error('Profile - Error fetching purchased songs:', result.error);
         setPurchasedSongs([]);
       }
     } catch (error) {
-      console.error('Error fetching purchased songs:', error);
+      console.error('Profile - Error fetching purchased songs:', error);
       setPurchasedSongs([]);
+    }
+  };
+
+  const fetchTickets = async (userId: string) => {
+    try {
+      const result = await ticketService.getUserTickets(userId);
+      if (result.success && result.data) {
+        setTickets(result.data);
+        console.log('Tickets loaded:', result.data.length);
+      } else {
+        console.error('Error fetching tickets:', result.error);
+        setTickets([]);
+      }
+    } catch (error) {
+      console.error('Error fetching tickets:', error);
+      setTickets([]);
+    }
+  };
+
+  // Fetch playlists for spotter
+  const fetchPlaylists = async (userId: string) => {
+    try {
+      const result = await playlistService.getUserPlaylists(userId);
+      if (result.success && result.data) {
+        setPlaylists(result.data);
+        console.log('Playlists loaded:', result.data.length);
+      } else {
+        console.error('Error fetching playlists:', result.error);
+        setPlaylists([]);
+      }
+    } catch (error) {
+      console.error('Error fetching playlists:', error);
+      setPlaylists([]);
+    }
+  };
+
+  // Fetch albums for artist/band
+  const fetchAlbums = async (artistId: string, albumType: 'artist' | 'band') => {
+    try {
+      const result = albumType === 'artist' 
+        ? await albumService.getArtistAlbums(artistId)
+        : await albumService.getBandAlbums(artistId);
+      
+      if (result.success && result.data) {
+        setAlbums(result.data);
+        console.log('Albums loaded:', result.data.length);
+      } else {
+        console.error('Error fetching albums:', result.error);
+        setAlbums([]);
+      }
+    } catch (error) {
+      console.error('Error fetching albums:', error);
+      setAlbums([]);
+    }
+  };
+
+  // Fetch purchased albums for spotter
+  const fetchPurchasedAlbums = async (userId: string) => {
+    try {
+      const result = await albumService.getUserPurchasedAlbums(userId);
+      if (result.success && result.data) {
+        setPurchasedAlbums(result.data);
+        console.log('Purchased albums loaded:', result.data.length);
+      } else {
+        console.error('Error fetching purchased albums:', result.error);
+        setPurchasedAlbums([]);
+      }
+    } catch (error) {
+      console.error('Error fetching purchased albums:', error);
+      setPurchasedAlbums([]);
+    }
+  };
+
+  // Fetch shows for artist profiles
+  const fetchArtistShows = async (artistId: string) => {
+    try {
+      console.log('🎭 Fetching shows for artist:', artistId);
+      
+      // Get all shows where this artist is a member
+      const { data: shows, error } = await supabase
+        .from('shows')
+        .select(`
+          *,
+          venues:show_venue(venue_name, venue_profile_image)
+        `)
+        .order('created_at', { ascending: false });
+
+      if (error) {
+        console.error('Error fetching artist shows:', error);
+        return;
+      }
+
+      console.log('🎭 Found shows:', shows?.length || 0);
+
+      if (shows) {
+        // Filter shows where this artist is a member
+        const artistShows = shows.filter(show => {
+          return show.show_members?.some((member: any) => {
+            if (member.show_member_type === 'artist') {
+              return member.show_member_id === artistId;
+            }
+            return false;
+          });
+        });
+
+        // Separate by status
+        const active = artistShows.filter(show => show.show_status === 'active');
+        const pending = artistShows.filter(show => show.show_status === 'pending');
+        
+        setActiveShows(active);
+        setPendingShows(pending);
+
+        console.log('🎭 Artist shows categorized:', {
+          active: active.length,
+          pending: pending.length
+        });
+      }
+    } catch (error) {
+      console.error('Error fetching artist shows:', error);
+    }
+  };
+
+  // Fetch shows for venue profiles
+  const fetchVenueShows = async (venueId: string) => {
+    try {
+      console.log('🏛️ Fetching shows for venue:', venueId);
+      
+      // Get all shows where this venue is the host venue
+      const { data: shows, error } = await supabase
+        .from('shows')
+        .select('*')
+        .eq('show_venue', venueId)
+        .order('created_at', { ascending: false });
+
+      if (error) {
+        console.error('Error fetching venue shows:', error);
+        return;
+      }
+
+      console.log('🏛️ Found shows for venue:', shows?.length || 0);
+
+      if (shows) {
+        // Separate shows by status
+        const active = shows.filter(show => show.show_status === 'active');
+        const pending = shows.filter(show => show.show_status === 'pending');
+        
+        setActiveShows(active);
+        setPendingShows(pending);
+
+        console.log('🏛️ Venue shows categorized:', {
+          active: active.length,
+          pending: pending.length
+        });
+      }
+    } catch (error) {
+      console.error('Error fetching venue shows:', error);
     }
   };
 
@@ -314,8 +573,8 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
   useFocusEffect(
     useCallback(() => {
       if (activeProfile === 'spotter') {
-        // Refresh purchased songs when screen comes into focus
-        const fetchPurchasedSongsOnFocus = async () => {
+        // Refresh purchased songs and tickets when screen comes into focus
+        const fetchDataOnFocus = async () => {
           try {
             const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
             if (sessionError) return;
@@ -323,13 +582,15 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
             const userId = sessionData.session?.user?.id;
             if (userId) {
               await fetchPurchasedSongs(userId);
+              await fetchPurchasedAlbums(userId);
+              await fetchTickets(userId);
             }
           } catch (error) {
-            console.error('Error refreshing purchased songs on focus:', error);
+            console.error('Error refreshing data on focus:', error);
           }
         };
         
-        fetchPurchasedSongsOnFocus();
+        fetchDataOnFocus();
       }
     }, [activeProfile])
   );
@@ -722,22 +983,34 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
               showsHorizontalScrollIndicator={false}
             >
               {currentData.images.map((item, index) => (
-                <TouchableOpacity key={`profile-image-${index}-${item?.substring(item.length - 10) || index}`} onPress={() => handleImagePress(item)}>
-                  <Image 
-                    source={{ uri: item }} 
-                    style={styles.profileImage}
-                    resizeMode="cover"
-                  />
+                <TouchableOpacity key={`profile-image-${index}-${item?.substring(item.length - 10) || index}`} onPress={() => handleImagePress(item, index)}>
+                  <View style={styles.imageWrapper}>
+                    <Image 
+                      source={{ uri: item }} 
+                      style={styles.profileImage}
+                      resizeMode="cover"
+                    />
+                    {/* Small edit indicator */}
+                    <View style={styles.editIndicator}>
+                      <Text style={styles.editIndicatorText}>✎</Text>
+                    </View>
+                  </View>
                 </TouchableOpacity>
               ))}
             </ScrollView>
           ) : (
-            <TouchableOpacity onPress={() => handleImagePress(currentData.images[0])}>
-              <Image 
-                source={{ uri: currentData.images[0] }} 
-                style={styles.profileImage}
-                resizeMode="cover"
-              />
+            <TouchableOpacity onPress={() => handleImagePress(currentData.images[0], 0)}>
+              <View style={styles.imageWrapper}>
+                <Image 
+                  source={{ uri: currentData.images[0] }} 
+                  style={styles.profileImage}
+                  resizeMode="cover"
+                />
+                {/* Small edit indicator */}
+                <View style={styles.editIndicator}>
+                  <Text style={styles.editIndicatorText}>✎</Text>
+                </View>
+              </View>
             </TouchableOpacity>
           )
         ) : (
@@ -894,6 +1167,45 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
                         </TouchableOpacity>
                       ))}
                     </ScrollView>
+                  ) : tab.id === "upcoming" && tickets.length > 0 ? (
+                    <ScrollView 
+                      style={styles.showsList}
+                      showsVerticalScrollIndicator={false}
+                      nestedScrollEnabled={true}
+                    >
+                      {tickets.map((ticket) => (
+                        <TouchableOpacity 
+                          key={ticket.ticket_id}
+                          style={styles.ticketItem}
+                          onPress={() => handleTicketPress(ticket)}
+                        >
+                          <Image 
+                            source={{ 
+                              uri: ticket.shows.venues?.venue_profile_image || 'https://via.placeholder.com/50' 
+                            }}
+                            style={styles.showImage}
+                          />
+                          <View style={styles.showInfo}>
+                            <Text style={styles.showTitle}>
+                              {ticket.shows.venues?.venue_name || 'Venue TBD'}
+                            </Text>
+                            <Text style={styles.showDetails}>
+                              {formatShowDate(ticket.shows.show_date)} 
+                              {ticket.shows.show_time ? ` at ${ticket.shows.show_time}` : ''}
+                            </Text>
+                            <Text style={[
+                              styles.ticketPrice,
+                              { color: '#28a745' }
+                            ]}>
+                              ${ticket.ticket_price} • {ticket.ticket_status === 'scanned' ? 'Used' : 'Valid'}
+                            </Text>
+                            <Text style={styles.ticketInstructions}>
+                              Tap to view QR code
+                            </Text>
+                          </View>
+                        </TouchableOpacity>
+                      ))}
+                    </ScrollView>
                   ) : tab.id === "purchased" && purchasedSongs.length > 0 ? (
                     <ScrollView 
                       style={styles.songsList}
@@ -941,7 +1253,7 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
                         >
                           <Image 
                             source={{ 
-                              uri: purchase.song_image || 'https://via.placeholder.com/50' 
+                              uri: getImageUrl(purchase.song_image) || 'https://via.placeholder.com/50' 
                             }}
                             style={styles.bandImage}
                           />
@@ -954,7 +1266,7 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
                             </Text>
                             <Text style={styles.bandMembers}>
                               {purchase.purchase_type === 'free' ? 'Free' : `$${purchase.song_price}`} • 
-                              {new Date(purchase.purchase_date).toLocaleDateString()}
+                              {formatShowDate(purchase.purchase_date)}
                             </Text>
                             <Text style={styles.songType}>
                               {purchase.song_type === 'band' ? '🎸 Band Song' : '🎤 Artist Song'}
@@ -966,6 +1278,410 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
                         </TouchableOpacity>
                       ))}
                     </ScrollView>
+                  ) : tab.id === "activeShows" && activeShows.length > 0 ? (
+                    <ScrollView 
+                      style={styles.showsList}
+                      showsVerticalScrollIndicator={false}
+                      nestedScrollEnabled={true}
+                    >
+                      {activeShows.map((show) => (
+                        <TouchableOpacity 
+                          key={show.show_id}
+                          style={styles.showItem}
+                          onPress={() => navigation.navigate('ShowBill' as never, { show_id: show.show_id } as never)}
+                        >
+                          <View style={styles.showInfo}>
+                            <Text style={styles.showTitle}>
+                              {activeProfile === 'venue' 
+                                ? `Show at ${venueData?.venue_name || 'Your Venue'}`
+                                : `Show at ${show.venues?.venue_name || 'Unknown Venue'}`
+                              }
+                            </Text>
+                            <Text style={styles.showDate}>
+                              {show.show_date || show.show_preferred_date} at {show.show_time || show.show_preferred_time}
+                            </Text>
+                            <Text style={styles.showStatus}>Status: {show.show_status}</Text>
+                            <Text style={styles.showLineup}>
+                              {show.show_members?.length || 0} performer(s)
+                            </Text>
+                          </View>
+                          <Text style={styles.showArrow}>→</Text>
+                        </TouchableOpacity>
+                      ))}
+                    </ScrollView>
+                  ) : tab.id === "pendingShows" && pendingShows.length > 0 ? (
+                    <ScrollView 
+                      style={styles.showsList}
+                      showsVerticalScrollIndicator={false}
+                      nestedScrollEnabled={true}
+                    >
+                      {pendingShows.map((show) => (
+                        <TouchableOpacity 
+                          key={show.show_id}
+                          style={styles.showItem}
+                          onPress={() => navigation.navigate('ShowBill' as never, { show_id: show.show_id } as never)}
+                        >
+                          <View style={styles.showInfo}>
+                            <Text style={styles.showTitle}>
+                              {activeProfile === 'venue' 
+                                ? `Show at ${venueData?.venue_name || 'Your Venue'}`
+                                : `Show at ${show.venues?.venue_name || 'Unknown Venue'}`
+                              }
+                            </Text>
+                            <Text style={styles.showDate}>
+                              {show.show_date || show.show_preferred_date} at {show.show_time || show.show_preferred_time}
+                            </Text>
+                            <Text style={styles.showStatus}>Status: {show.show_status}</Text>
+                            <Text style={styles.showLineup}>
+                              {show.show_members?.length || 0} performer(s)
+                            </Text>
+                          </View>
+                          <Text style={styles.showArrow}>→</Text>
+                        </TouchableOpacity>
+                      ))}
+                    </ScrollView>
+                  ) : tab.id === "purchasedAlbums" && purchasedAlbums.length > 0 ? (
+                    <ScrollView 
+                      style={styles.albumsList}
+                      showsVerticalScrollIndicator={false}
+                      nestedScrollEnabled={true}
+                    >
+                      {purchasedAlbums.map((purchase) => {
+                        const isExpanded = expandedAlbums.has(purchase.album_id);
+                        return (
+                          <View key={purchase.album_id}>
+                            <TouchableOpacity 
+                              style={styles.albumItem}
+                              onPress={() => {
+                                const newExpanded = new Set(expandedAlbums);
+                                if (isExpanded) {
+                                  newExpanded.delete(purchase.album_id);
+                                } else {
+                                  newExpanded.add(purchase.album_id);
+                                }
+                                setExpandedAlbums(newExpanded);
+                              }}
+                            >
+                              <View style={styles.albumImageContainer}>
+                                {purchase.album_image ? (
+                                  <Image 
+                                    source={{ uri: getImageUrl(purchase.album_image) }}
+                                    style={styles.albumImage}
+                                  />
+                                ) : (
+                                  <View style={styles.albumPlaceholder}>
+                                    <Text style={styles.albumPlaceholderText}>🎵</Text>
+                                  </View>
+                                )}
+                              </View>
+                              <View style={styles.albumInfo}>
+                                <Text style={styles.albumName}>{purchase.album_title}</Text>
+                                <Text style={styles.albumArtist}>
+                                  by {purchase.artist_name || purchase.band_name || 'Unknown Artist'}
+                                </Text>
+                                <Text style={styles.albumSongCount}>
+                                  {purchase.album_song_data.length} song{purchase.album_song_data.length !== 1 ? 's' : ''}
+                                </Text>
+                                <Text style={styles.albumPrice}>
+                                  {purchase.purchase_type === 'free' ? 'Free' : `$${purchase.purchase_price}`} • 
+                                  {formatShowDate(purchase.purchase_date)}
+                                </Text>
+                              </View>
+                              <View style={styles.albumExpandButton}>
+                                <Text style={styles.albumExpandIcon}>
+                                  {isExpanded ? '▼' : '▶'}
+                                </Text>
+                              </View>
+                            </TouchableOpacity>
+                            
+                            {isExpanded && (
+                              <View style={styles.albumSongs}>
+                                {purchase.album_song_data.map((song, index) => (
+                                  <TouchableOpacity
+                                    key={song.song_id}
+                                    style={styles.albumSongItem}
+                                    onPress={() => {
+                                      const songToPlay = {
+                                        song_id: song.song_id,
+                                        song_title: song.song_title,
+                                        song_image: song.song_image || '',
+                                        song_file: song.song_file,
+                                        artist_id: song.song_artist || song.song_band || '',
+                                        spotter_id: spotterName || '',
+                                        song_price: '0',
+                                        created_at: new Date().toISOString(),
+                                        song_type: song.song_type,
+                                        band_id: song.song_band,
+                                      };
+                                      const albumSongs = purchase.album_song_data.map(s => ({
+                                        song_id: s.song_id,
+                                        song_title: s.song_title,
+                                        song_image: s.song_image || '',
+                                        song_file: s.song_file,
+                                        artist_id: s.song_artist || s.song_band || '',
+                                        spotter_id: spotterName || '',
+                                        song_price: '0',
+                                        created_at: new Date().toISOString(),
+                                        song_type: s.song_type,
+                                        band_id: s.song_band,
+                                      }));
+                                      playSong(songToPlay, albumSongs);
+                                    }}
+                                  >
+                                    <Text style={styles.albumSongNumber}>{index + 1}</Text>
+                                    {song.song_image && (
+                                      <Image 
+                                        source={{ uri: getImageUrl(song.song_image) }}
+                                        style={styles.albumSongImage}
+                                      />
+                                    )}
+                                    <View style={styles.albumSongInfo}>
+                                      <Text style={styles.albumSongTitle}>{song.song_title}</Text>
+                                      <Text style={styles.albumSongArtist}>
+                                        {song.artist_name || song.band_name || 'Unknown Artist'}
+                                      </Text>
+                                    </View>
+                                  </TouchableOpacity>
+                                ))}
+                                {purchase.album_song_data.length === 0 && (
+                                  <Text style={styles.emptyAlbumText}>No songs in this album yet</Text>
+                                )}
+                              </View>
+                            )}
+                          </View>
+                        );
+                      })}
+                    </ScrollView>
+                  ) : tab.id === "playlists" && playlists.length > 0 ? (
+                    <ScrollView 
+                      style={styles.playlistsList}
+                      showsVerticalScrollIndicator={false}
+                      nestedScrollEnabled={true}
+                    >
+                      {playlists.map((playlist) => {
+                        const isExpanded = expandedPlaylists.has(playlist.playlist_id);
+                        return (
+                          <View key={playlist.playlist_id}>
+                            <TouchableOpacity 
+                              style={styles.playlistItem}
+                              onPress={() => {
+                                const newExpanded = new Set(expandedPlaylists);
+                                if (isExpanded) {
+                                  newExpanded.delete(playlist.playlist_id);
+                                } else {
+                                  newExpanded.add(playlist.playlist_id);
+                                }
+                                setExpandedPlaylists(newExpanded);
+                              }}
+                            >
+                              <View style={styles.playlistImageContainer}>
+                                {playlist.playlist_image ? (
+                                  <Image 
+                                    source={{ uri: getImageUrl(playlist.playlist_image) }}
+                                    style={styles.playlistImage}
+                                  />
+                                ) : (
+                                  <View style={styles.playlistPlaceholder}>
+                                    <Text style={styles.playlistPlaceholderText}>🎵</Text>
+                                  </View>
+                                )}
+                              </View>
+                              <View style={styles.playlistInfo}>
+                                <Text style={styles.playlistName}>{playlist.playlist_name}</Text>
+                                <Text style={styles.playlistSongCount}>
+                                  {playlist.playlist_songs.length} song{playlist.playlist_songs.length !== 1 ? 's' : ''}
+                                </Text>
+                                <Text style={styles.playlistDate}>
+                                  Created {formatShowDate(playlist.created_at)}
+                                </Text>
+                              </View>
+                              <View style={styles.playlistExpandButton}>
+                                <Text style={styles.playlistExpandIcon}>
+                                  {isExpanded ? '▼' : '▶'}
+                                </Text>
+                              </View>
+                              <TouchableOpacity style={styles.playlistMenuButton}>
+                                <Text style={styles.playlistMenuIcon}>⋯</Text>
+                              </TouchableOpacity>
+                            </TouchableOpacity>
+                            
+                            {isExpanded && (
+                              <View style={styles.playlistSongs}>
+                                {playlist.playlist_song_data.map((song, index) => (
+                                  <TouchableOpacity
+                                    key={song.song_id}
+                                    style={styles.playlistSongItem}
+                                    onPress={() => {
+                                      const songToPlay = {
+                                        song_id: song.song_id,
+                                        song_title: song.song_title,
+                                        song_image: song.song_image || '',
+                                        song_file: song.song_file,
+                                        artist_id: song.song_artist || song.song_band || '',
+                                        spotter_id: spotterName || '',
+                                        song_price: '0',
+                                        created_at: new Date().toISOString(),
+                                        song_type: song.song_type,
+                                        band_id: song.song_band,
+                                      };
+                                      const playlistSongs = playlist.playlist_song_data.map(s => ({
+                                        song_id: s.song_id,
+                                        song_title: s.song_title,
+                                        song_image: s.song_image || '',
+                                        song_file: s.song_file,
+                                        artist_id: s.song_artist || s.song_band || '',
+                                        spotter_id: spotterName || '',
+                                        song_price: '0',
+                                        created_at: new Date().toISOString(),
+                                        song_type: s.song_type,
+                                        band_id: s.song_band,
+                                      }));
+                                      playSong(songToPlay, playlistSongs);
+                                    }}
+                                  >
+                                    <Text style={styles.playlistSongNumber}>{index + 1}</Text>
+                                    {song.song_image && (
+                                      <Image 
+                                        source={{ uri: getImageUrl(song.song_image) }}
+                                        style={styles.playlistSongImage}
+                                      />
+                                    )}
+                                    <View style={styles.playlistSongInfo}>
+                                      <Text style={styles.playlistSongTitle}>{song.song_title}</Text>
+                                      <Text style={styles.playlistSongArtist}>
+                                        {song.artist_name || song.band_name || 'Unknown Artist'}
+                                      </Text>
+                                    </View>
+                                  </TouchableOpacity>
+                                ))}
+                                {playlist.playlist_song_data.length === 0 && (
+                                  <Text style={styles.emptyPlaylistText}>No songs in this playlist yet</Text>
+                                )}
+                              </View>
+                            )}
+                          </View>
+                        );
+                      })}
+                    </ScrollView>
+                  ) : tab.id === "albums" && albums.length > 0 ? (
+                    <ScrollView 
+                      style={styles.albumsList}
+                      showsVerticalScrollIndicator={false}
+                      nestedScrollEnabled={true}
+                    >
+                      {albums.map((album) => {
+                        const isExpanded = expandedAlbums.has(album.album_id);
+                        return (
+                          <View key={album.album_id}>
+                            <TouchableOpacity 
+                              style={styles.albumItem}
+                              onPress={() => {
+                                const newExpanded = new Set(expandedAlbums);
+                                if (isExpanded) {
+                                  newExpanded.delete(album.album_id);
+                                } else {
+                                  newExpanded.add(album.album_id);
+                                }
+                                setExpandedAlbums(newExpanded);
+                              }}
+                            >
+                              <View style={styles.albumImageContainer}>
+                                {album.album_image ? (
+                                  <Image 
+                                    source={{ uri: getImageUrl(album.album_image) }}
+                                    style={styles.albumImage}
+                                  />
+                                ) : (
+                                  <View style={styles.albumPlaceholder}>
+                                    <Text style={styles.albumPlaceholderText}>🎵</Text>
+                                  </View>
+                                )}
+                              </View>
+                              <View style={styles.albumInfo}>
+                                <Text style={styles.albumName}>{album.album_title}</Text>
+                                <Text style={styles.albumSongCount}>
+                                  {album.album_song_data.length} song{album.album_song_data.length !== 1 ? 's' : ''}
+                                </Text>
+                                <Text style={styles.albumPrice}>
+                                  ${album.album_price} • {album.album_status}
+                                </Text>
+                                <Text style={styles.albumDate}>
+                                  Created {formatShowDate(album.created_at)}
+                                </Text>
+                                {album.album_type === 'band' && album.album_status === 'pending' && (
+                                  <Text style={styles.albumPendingText}>
+                                    Awaiting band approval
+                                  </Text>
+                                )}
+                              </View>
+                              <View style={styles.albumExpandButton}>
+                                <Text style={styles.albumExpandIcon}>
+                                  {isExpanded ? '▼' : '▶'}
+                                </Text>
+                              </View>
+                              <TouchableOpacity style={styles.albumMenuButton}>
+                                <Text style={styles.albumMenuIcon}>⋯</Text>
+                              </TouchableOpacity>
+                            </TouchableOpacity>
+                            
+                            {isExpanded && (
+                              <View style={styles.albumSongs}>
+                                {album.album_song_data.map((song, index) => (
+                                  <TouchableOpacity
+                                    key={song.song_id}
+                                    style={styles.albumSongItem}
+                                    onPress={() => {
+                                      const songToPlay = {
+                                        song_id: song.song_id,
+                                        song_title: song.song_title,
+                                        song_image: song.song_image || '',
+                                        song_file: song.song_file,
+                                        artist_id: song.song_artist || song.song_band || '',
+                                        spotter_id: spotterName || '',
+                                        song_price: '0',
+                                        created_at: new Date().toISOString(),
+                                        song_type: song.song_type,
+                                        band_id: song.song_band,
+                                      };
+                                      const albumSongs = album.album_song_data.map(s => ({
+                                        song_id: s.song_id,
+                                        song_title: s.song_title,
+                                        song_image: s.song_image || '',
+                                        song_file: s.song_file,
+                                        artist_id: s.song_artist || s.song_band || '',
+                                        spotter_id: spotterName || '',
+                                        song_price: '0',
+                                        created_at: new Date().toISOString(),
+                                        song_type: s.song_type,
+                                        band_id: s.song_band,
+                                      }));
+                                      playSong(songToPlay, albumSongs);
+                                    }}
+                                  >
+                                    <Text style={styles.albumSongNumber}>{index + 1}</Text>
+                                    {song.song_image && (
+                                      <Image 
+                                        source={{ uri: getImageUrl(song.song_image) }}
+                                        style={styles.albumSongImage}
+                                      />
+                                    )}
+                                    <View style={styles.albumSongInfo}>
+                                      <Text style={styles.albumSongTitle}>{song.song_title}</Text>
+                                      <Text style={styles.albumSongArtist}>
+                                        {song.artist_name || song.band_name || 'Unknown Artist'}
+                                      </Text>
+                                    </View>
+                                  </TouchableOpacity>
+                                ))}
+                                {album.album_song_data.length === 0 && (
+                                  <Text style={styles.emptyAlbumText}>No songs in this album yet</Text>
+                                )}
+                              </View>
+                            )}
+                          </View>
+                        );
+                      })}
+                    </ScrollView>
                   ) : (
                     <Text style={styles.tabContentText}>
                       {((activeProfile === 'artist' || activeProfile === 'venue') && isOwner) 
@@ -975,14 +1691,17 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
                     </Text>
                   )}
                   {((activeProfile === 'spotter' && tab.id === "playlists") || 
-                    (activeProfile === 'artist' && tab.id === "songs" && isOwner) ||
+                    (activeProfile === 'artist' && (tab.id === "songs" || tab.id === "albums") && isOwner) ||
                     (activeProfile === 'venue' && tab.id === "songs" && isOwner)) && (
                     <TouchableOpacity 
                       style={styles.addButton}
                       onPress={() => {
                         if (activeProfile === 'spotter') {
-                          // Handle playlist creation
-                          console.log('Add playlist');
+                          // Open playlist creation modal
+                          setShowPlaylistModal(true);
+                        } else if (tab.id === "albums") {
+                          // Open album creation modal
+                          setShowAlbumModal(true);
                         } else {
                           // Open song upload form
                           setShowSongUploadForm(true);
@@ -990,7 +1709,7 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
                       }}
                     >
                       <Text style={styles.addButtonText}>
-                        + {activeProfile === 'spotter' ? 'Add Playlist' : 'Upload Song'}
+                        + {activeProfile === 'spotter' ? 'Add Playlist' : tab.id === 'albums' ? 'Create Album' : 'Upload Song'}
                       </Text>
                     </TouchableOpacity>
                   )}
@@ -1163,6 +1882,19 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
                 <Text style={styles.backButtonText}>← Back</Text>
               </LinearGradient>
             </TouchableOpacity>
+            
+            {/* Edit button - only show for user's own profile */}
+            <TouchableOpacity 
+              style={styles.editImageButton}
+              onPress={handleEditImages}
+            >
+              <LinearGradient
+                colors={["#ff00ff", "#2a2882"]}
+                style={styles.editImageButtonGradient}
+              >
+                <Text style={styles.editImageButtonText}>Edit Photos</Text>
+              </LinearGradient>
+            </TouchableOpacity>
           </TouchableOpacity>
         </View>
       </Modal>
@@ -1177,6 +1909,46 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
         }}
         artistData={activeProfile === 'artist' ? artistData : venueData}
       />
+
+      {/* QR Code Modal */}
+      <QRCodeModal
+        visible={showQRModal}
+        onClose={() => setShowQRModal(false)}
+        ticket={selectedTicket}
+      />
+
+      {/* Playlist Creation Modal */}
+      <PlaylistCreationModal
+        visible={showPlaylistModal}
+        onClose={() => setShowPlaylistModal(false)}
+        onPlaylistCreated={async () => {
+          // Refresh playlists after creation
+          const { data: { user } } = await supabase.auth.getUser();
+          if (user) {
+            await fetchPlaylists(user.id);
+          }
+        }}
+        purchasedSongs={purchasedSongs}
+      />
+
+      {/* Album Creation Modal */}
+      {(activeProfile === 'artist' || activeProfile === 'venue') && (
+        <AlbumCreationModal
+          visible={showAlbumModal}
+          onClose={() => setShowAlbumModal(false)}
+          onAlbumCreated={async () => {
+            // Refresh albums after creation
+            if (activeProfile === 'artist' && artistID) {
+              await fetchAlbums(artistID, 'artist');
+            } else if (activeProfile === 'venue' && venueID) {
+              await fetchAlbums(venueID, 'band');
+            }
+          }}
+          artistData={activeProfile === 'artist' ? artistData : venueData}
+          albumType={activeProfile === 'artist' ? 'artist' : 'band'}
+          songs={songs}
+        />
+      )}
       
     </View>
   );
@@ -1748,6 +2520,48 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontWeight: '600',
   },
+  editImageButton: {
+    position: 'absolute',
+    bottom: 60,
+    right: 20,
+    zIndex: 1000,
+  },
+  editImageButtonGradient: {
+    paddingHorizontal: 24,
+    paddingVertical: 14,
+    borderRadius: 25,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  editImageButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontFamily: 'Amiko-Regular',
+    fontWeight: '700',
+  },
+  imageWrapper: {
+    position: 'relative',
+    width: SCREEN_WIDTH,
+    height: IMAGE_SECTION_HEIGHT,
+  },
+  editIndicator: {
+    position: 'absolute',
+    top: 20,
+    right: 20,
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    borderRadius: 20,
+    width: 40,
+    height: 40,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: '#ff00ff',
+  },
+  editIndicatorText: {
+    color: '#fff',
+    fontSize: 18,
+    fontWeight: 'bold',
+  },
   songPurchaseItem: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1780,6 +2594,366 @@ const styles = StyleSheet.create({
   playButtonIcon: {
     fontSize: 16,
     color: '#fff',
+  },
+  // Ticket styles
+  showsList: {
+    flex: 1,
+  },
+  ticketItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 15,
+    paddingHorizontal: 15,
+    backgroundColor: '#f8f9fa',
+    marginBottom: 8,
+    borderRadius: 12,
+    borderLeftWidth: 4,
+    borderLeftColor: '#28a745',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  ticketPrice: {
+    fontSize: 14,
+    fontFamily: 'Amiko-Regular',
+    fontWeight: '600',
+    marginBottom: 2,
+  },
+  ticketInstructions: {
+    fontSize: 12,
+    fontFamily: 'Amiko-Regular',
+    color: '#666',
+    fontStyle: 'italic',
+  },
+  // Show styles
+  showItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 12,
+    paddingHorizontal: 15,
+    backgroundColor: '#f8f9fa',
+    marginBottom: 8,
+    borderRadius: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  showInfo: {
+    flex: 1,
+    marginRight: 10,
+  },
+  showTitle: {
+    fontSize: 16,
+    fontFamily: 'Amiko-Regular',
+    color: '#333',
+    fontWeight: '600',
+    marginBottom: 4,
+  },
+  showDate: {
+    fontSize: 14,
+    fontFamily: 'Amiko-Regular',
+    color: '#666',
+    marginBottom: 2,
+  },
+  showStatus: {
+    fontSize: 12,
+    fontFamily: 'Amiko-Regular',
+    color: '#2a2882',
+    fontWeight: '600',
+  },
+  showLineup: {
+    fontSize: 12,
+    fontFamily: 'Amiko-Regular',
+    color: '#999',
+    marginTop: 2,
+  },
+  showArrow: {
+    fontSize: 18,
+    color: '#2a2882',
+    fontWeight: 'bold',
+  },
+  // Playlist styles
+  playlistsList: {
+    flex: 1,
+  },
+  playlistItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 15,
+    backgroundColor: '#f8f9fa',
+    marginBottom: 8,
+    borderRadius: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  playlistImageContainer: {
+    width: 60,
+    height: 60,
+    borderRadius: 8,
+    overflow: 'hidden',
+    marginRight: 12,
+  },
+  playlistImage: {
+    width: '100%',
+    height: '100%',
+    resizeMode: 'cover',
+  },
+  playlistPlaceholder: {
+    width: '100%',
+    height: '100%',
+    backgroundColor: '#e9ecef',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  playlistPlaceholderText: {
+    fontSize: 24,
+    color: '#6c757d',
+  },
+  playlistInfo: {
+    flex: 1,
+    justifyContent: 'center',
+  },
+  playlistName: {
+    fontSize: 16,
+    fontFamily: 'Amiko-Regular',
+    color: '#333',
+    fontWeight: '600',
+    marginBottom: 2,
+  },
+  playlistSongCount: {
+    fontSize: 14,
+    fontFamily: 'Amiko-Regular',
+    color: '#666',
+    marginBottom: 2,
+  },
+  playlistDate: {
+    fontSize: 12,
+    fontFamily: 'Amiko-Regular',
+    color: '#999',
+  },
+  playlistMenuButton: {
+    padding: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  playlistMenuIcon: {
+    fontSize: 20,
+    color: '#666',
+    fontWeight: 'bold',
+  },
+  playlistExpandButton: {
+    padding: 10,
+    marginRight: 5,
+  },
+  playlistExpandIcon: {
+    fontSize: 12,
+    color: '#888',
+  },
+  playlistSongs: {
+    backgroundColor: 'rgba(0, 0, 0, 0.2)',
+    paddingVertical: 10,
+    paddingHorizontal: 15,
+    borderBottomLeftRadius: 10,
+    borderBottomRightRadius: 10,
+    marginTop: -10,
+    marginBottom: 10,
+  },
+  playlistSongItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 5,
+  },
+  playlistSongNumber: {
+    width: 25,
+    fontSize: 14,
+    color: '#888',
+    marginRight: 10,
+  },
+  playlistSongImage: {
+    width: 40,
+    height: 40,
+    borderRadius: 4,
+    marginRight: 12,
+    backgroundColor: '#333',
+  },
+  playlistSongInfo: {
+    flex: 1,
+  },
+  playlistSongTitle: {
+    fontSize: 14,
+    color: '#ffffff',
+    fontWeight: '500',
+    marginBottom: 2,
+  },
+  playlistSongArtist: {
+    fontSize: 12,
+    color: '#888',
+  },
+  emptyPlaylistText: {
+    textAlign: 'center',
+    color: '#888',
+    fontSize: 14,
+    fontStyle: 'italic',
+    paddingVertical: 20,
+  },
+  
+  // Album styles
+  albumsList: {
+    flex: 1,
+  },
+  albumItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 15,
+    backgroundColor: '#f8f9fa',
+    marginBottom: 8,
+    borderRadius: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  albumImageContainer: {
+    width: 60,
+    height: 60,
+    borderRadius: 8,
+    overflow: 'hidden',
+    marginRight: 12,
+  },
+  albumImage: {
+    width: '100%',
+    height: '100%',
+    resizeMode: 'cover',
+  },
+  albumPlaceholder: {
+    width: '100%',
+    height: '100%',
+    backgroundColor: '#e9ecef',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  albumPlaceholderText: {
+    fontSize: 24,
+    color: '#6c757d',
+  },
+  albumInfo: {
+    flex: 1,
+    justifyContent: 'center',
+  },
+  albumName: {
+    fontSize: 16,
+    fontFamily: 'Amiko-Regular',
+    color: '#333',
+    fontWeight: '600',
+    marginBottom: 2,
+  },
+  albumArtist: {
+    fontSize: 14,
+    fontFamily: 'Amiko-Regular',
+    color: '#666',
+    marginBottom: 2,
+  },
+  albumSongCount: {
+    fontSize: 14,
+    fontFamily: 'Amiko-Regular',
+    color: '#666',
+    marginBottom: 2,
+  },
+  albumPrice: {
+    fontSize: 12,
+    fontFamily: 'Amiko-Regular',
+    color: '#28a745',
+    fontWeight: '600',
+  },
+  albumDate: {
+    fontSize: 12,
+    fontFamily: 'Amiko-Regular',
+    color: '#999',
+  },
+  albumPendingText: {
+    fontSize: 12,
+    fontFamily: 'Amiko-Regular',
+    color: '#ffc107',
+    fontWeight: '600',
+    marginTop: 2,
+  },
+  albumMenuButton: {
+    padding: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  albumMenuIcon: {
+    fontSize: 20,
+    color: '#666',
+    fontWeight: 'bold',
+  },
+  albumExpandButton: {
+    padding: 10,
+    marginRight: 5,
+  },
+  albumExpandIcon: {
+    fontSize: 12,
+    color: '#888',
+  },
+  albumSongs: {
+    backgroundColor: 'rgba(0, 0, 0, 0.2)',
+    paddingVertical: 10,
+    paddingHorizontal: 15,
+    borderBottomLeftRadius: 10,
+    borderBottomRightRadius: 10,
+    marginTop: -10,
+    marginBottom: 10,
+  },
+  albumSongItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 5,
+  },
+  albumSongNumber: {
+    width: 25,
+    fontSize: 14,
+    color: '#888',
+    marginRight: 10,
+  },
+  albumSongImage: {
+    width: 40,
+    height: 40,
+    borderRadius: 4,
+    marginRight: 12,
+    backgroundColor: '#333',
+  },
+  albumSongInfo: {
+    flex: 1,
+  },
+  albumSongTitle: {
+    fontSize: 14,
+    color: '#ffffff',
+    fontWeight: '500',
+    marginBottom: 2,
+  },
+  albumSongArtist: {
+    fontSize: 12,
+    color: '#888',
+  },
+  emptyAlbumText: {
+    textAlign: 'center',
+    color: '#888',
+    fontSize: 14,
+    fontStyle: 'italic',
+    paddingVertical: 20,
   },
 });
 

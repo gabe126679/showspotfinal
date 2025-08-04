@@ -14,6 +14,7 @@ import {
   Platform,
   Vibration,
   Modal,
+  Alert,
 } from "react-native";
 import { PanGestureHandler, State } from 'react-native-gesture-handler';
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -22,7 +23,10 @@ import { useRouter } from "expo-router";
 import { supabase } from "../lib/supabase";
 import { LinearGradient } from "expo-linear-gradient";
 import ShowSpotHeader from "./ShowSpotHeader";
+import ShowVoteButton from "./ShowVoteButton";
 import { ticketService } from "../services/ticketService";
+import { backlinesService, BacklineInfo } from "../services/backlinesService";
+import BacklineApplicationModal from "./BacklineApplicationModal";
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get("window");
 // iPhone 16 specific dimensions for gesture positioning - matching profile.tsx exactly
@@ -148,6 +152,11 @@ const ShowBill: React.FC<ShowBillProps> = ({ route }) => {
     capacity: number;
     isSoldOut: boolean;
   } | null>(null);
+  
+  // Backlines state
+  const [backlines, setBacklines] = useState<BacklineInfo[]>([]);
+  const [showBacklineModal, setShowBacklineModal] = useState(false);
+  const [isUserOnShow, setIsUserOnShow] = useState(false);
 
   // Animation refs - matching bandPublicProfile.tsx exactly
   const panelTranslateY = useRef(new Animated.Value(COLLAPSED_TRANSLATE_Y)).current;
@@ -302,6 +311,33 @@ const ShowBill: React.FC<ShowBillProps> = ({ route }) => {
     );
   }, []);
 
+  // Fetch backlines data
+  const fetchBacklines = async (userId?: string) => {
+    try {
+      const result = await backlinesService.getShowBacklines(show_id, userId);
+      if (result.success && result.data) {
+        setBacklines(result.data);
+      }
+    } catch (error) {
+      console.error('Error fetching backlines:', error);
+    }
+  };
+
+  // Check if user is on the show
+  const checkUserOnShow = (showMembers: ShowMember[], userArtistIds: string[]) => {
+    return showMembers.some((member: ShowMember) => {
+      if (member.show_member_type === 'artist') {
+        return userArtistIds.includes(member.show_member_id);
+      } else if (member.show_member_type === 'band') {
+        // Check if user is in this band's consensus
+        return member.show_member_consensus?.some((consensus: any) => 
+          userArtistIds.includes(consensus.show_band_member_id)
+        );
+      }
+      return false;
+    });
+  };
+
   // Fetch show data
   const fetchShowData = async () => {
     try {
@@ -417,6 +453,7 @@ const ShowBill: React.FC<ShowBillProps> = ({ route }) => {
           });
           
           setIsPerformer(isDirectPerformer);
+          setIsUserOnShow(isDirectPerformer);
 
           // Check if user owns the venue
           if (show.show_venue) {
@@ -533,6 +570,9 @@ const ShowBill: React.FC<ShowBillProps> = ({ route }) => {
         });
         
         setPerformers(validPerformers);
+
+        // Fetch backlines data
+        await fetchBacklines(session?.user?.id);
       }
 
       // Fade in animation - matching bandPublicProfile.tsx
@@ -703,17 +743,41 @@ const ShowBill: React.FC<ShowBillProps> = ({ route }) => {
       case 'backlines':
         return (
           <View style={styles.tabContent}>
-            {showData?.show_backlines && showData.show_backlines.length > 0 ? (
+            {/* Add Backline Button - only show if user is not on the show */}
+            {currentUser && !isUserOnShow && (
+              <TouchableOpacity
+                style={styles.addBacklineButton}
+                onPress={() => setShowBacklineModal(true)}
+              >
+                <LinearGradient
+                  colors={["#ff00ff", "#2a2882"]}
+                  style={styles.addBacklineGradient}
+                >
+                  <Text style={styles.addBacklineText}>+ Add Backline</Text>
+                </LinearGradient>
+              </TouchableOpacity>
+            )}
+
+            {backlines.length > 0 ? (
               <ScrollView showsVerticalScrollIndicator={false} nestedScrollEnabled={true}>
-                {showData.show_backlines.map((backline: any, index: number) => (
-                  <View key={index} style={styles.backlineItem}>
-                    <Text style={styles.backlineName}>{backline.name || 'Backline Item'}</Text>
-                    <Text style={styles.backlineDescription}>{backline.description || 'No description'}</Text>
-                  </View>
+                {backlines.map((backline, index) => (
+                  <BacklineItem
+                    key={`${backline.backlineArtist}-${index}`}
+                    backline={backline}
+                    currentUserId={currentUser?.id}
+                    onVote={() => fetchBacklines(currentUser?.id)}
+                  />
                 ))}
               </ScrollView>
             ) : (
-              <Text style={styles.noDataText}>No backlines listed</Text>
+              <View style={styles.noBacklinesContainer}>
+                <Text style={styles.noDataText}>No backlines yet</Text>
+                {!isUserOnShow && (
+                  <Text style={styles.backlineHintText}>
+                    Artists and bands can apply to backline this show
+                  </Text>
+                )}
+              </View>
             )}
           </View>
         );
@@ -807,9 +871,20 @@ const ShowBill: React.FC<ShowBillProps> = ({ route }) => {
               )}
               
               {showData?.show_status === 'pending' && showData?.ticket_price && (
-                <Text style={styles.priceNote}>
-                  Tickets will be available when show becomes active
-                </Text>
+                <>
+                  <Text style={styles.priceNote}>
+                    Tickets will be available when show becomes active
+                  </Text>
+                  <View style={styles.pendingVoteContainer}>
+                    <Text style={styles.votePromptText}>Vote to support this show:</Text>
+                    <ShowVoteButton 
+                      showId={showData.show_id}
+                      buttonStyle={styles.tabVoteButton}
+                      textStyle={styles.tabVoteButtonText}
+                      countStyle={styles.tabVoteCount}
+                    />
+                  </View>
+                </>
               )}
             </View>
           </View>
@@ -898,6 +973,9 @@ const ShowBill: React.FC<ShowBillProps> = ({ route }) => {
           onNotificationPress={() => {
             console.log('Notification pressed');
           }}
+          onMessagePress={() => {
+            navigation.navigate('MessagesPage' as never);
+          }}
         />
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color="#fff" />
@@ -921,6 +999,9 @@ const ShowBill: React.FC<ShowBillProps> = ({ route }) => {
           onNotificationPress={() => {
             console.log('Notification pressed');
           }}
+          onMessagePress={() => {
+            navigation.navigate('MessagesPage' as never);
+          }}
         />
         <View style={styles.errorContainer}>
           <Text style={styles.errorText}>Error: {error}</Text>
@@ -931,6 +1012,142 @@ const ShowBill: React.FC<ShowBillProps> = ({ route }) => {
       </SafeAreaView>
     );
   }
+
+  // Backline Item Component
+  const BacklineItem: React.FC<{
+    backline: BacklineInfo;
+    currentUserId?: string;
+    onVote: () => void;
+  }> = ({ backline, currentUserId, onVote }) => {
+    const [artistData, setArtistData] = useState<{ name: string; image?: string } | null>(null);
+    const [voting, setVoting] = useState(false);
+
+    useEffect(() => {
+      fetchArtistData();
+    }, [backline.backlineArtist]);
+
+    const fetchArtistData = async () => {
+      try {
+        if (backline.backlineArtistType === 'artist') {
+          const { data } = await supabase
+            .from('artists')
+            .select('artist_name, artist_profile_image')
+            .eq('artist_id', backline.backlineArtist)
+            .single();
+          
+          if (data) {
+            setArtistData({
+              name: data.artist_name,
+              image: data.artist_profile_image
+            });
+          }
+        } else {
+          const { data } = await supabase
+            .from('bands')
+            .select('band_name, band_profile_picture')
+            .eq('band_id', backline.backlineArtist)
+            .single();
+          
+          if (data) {
+            setArtistData({
+              name: data.band_name,
+              image: data.band_profile_picture
+            });
+          }
+        }
+      } catch (error) {
+        console.error('Error fetching artist data:', error);
+      }
+    };
+
+    const handleVote = async () => {
+      if (!currentUserId || voting || backline.userHasVoted) return;
+
+      try {
+        setVoting(true);
+        const result = await backlinesService.voteForBackline(
+          show_id,
+          backline.backlineArtist,
+          currentUserId
+        );
+
+        if (result.success) {
+          onVote();
+        } else {
+          Alert.alert('Error', result.error || 'Failed to vote');
+        }
+      } catch (error) {
+        console.error('Error voting for backline:', error);
+        Alert.alert('Error', 'Failed to vote for backline');
+      } finally {
+        setVoting(false);
+      }
+    };
+
+    return (
+      <View style={styles.backlineItem}>
+        <TouchableOpacity
+          style={styles.backlineHeader}
+          onPress={() => {
+            // Navigate to artist/band profile
+            if (backline.backlineArtistType === 'artist') {
+              navigation.navigate('ArtistPublicProfile' as never, { 
+                artist_id: backline.backlineArtist 
+              } as never);
+            } else {
+              navigation.navigate('BandPublicProfile' as never, { 
+                band_id: backline.backlineArtist 
+              } as never);
+            }
+          }}
+        >
+          <Image
+            source={{ uri: artistData?.image || 'https://via.placeholder.com/50' }}
+            style={styles.backlineImage}
+          />
+          <View style={styles.backlineInfo}>
+            <Text style={styles.backlineName}>
+              {artistData?.name || 'Loading...'}
+            </Text>
+            <Text style={styles.backlineType}>
+              {backline.backlineArtistType === 'artist' ? 'Solo Artist' : 'Band'}
+            </Text>
+            <Text style={[
+              styles.backlineStatus,
+              { color: backline.backlineStatus === 'active' ? '#28a745' : '#ffc107' }
+            ]}>
+              {backline.backlineStatus === 'active' ? 'Active' : 'Pending Consensus'}
+            </Text>
+          </View>
+        </TouchableOpacity>
+
+        <View style={styles.backlineActions}>
+          <View style={styles.voteSection}>
+            <Text style={styles.voteCount}>{backline.voteCount} votes</Text>
+            {currentUserId && !backline.userHasVoted && (
+              <TouchableOpacity
+                style={[
+                  styles.voteButton,
+                  voting && styles.voteButtonDisabled
+                ]}
+                onPress={handleVote}
+                disabled={voting}
+              >
+                {voting ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  <Text style={styles.voteButtonText}>Vote</Text>
+                )}
+              </TouchableOpacity>
+            )}
+            {backline.userHasVoted && (
+              <Text style={styles.votedText}>Voted ✓</Text>
+            )}
+          </View>
+        </View>
+      </View>
+    );
+  };
 
   const currentData = getCurrentShowData();
 
@@ -949,6 +1166,9 @@ const ShowBill: React.FC<ShowBillProps> = ({ route }) => {
           onBackPress={() => navigation.goBack()}
           onNotificationPress={() => {
             console.log('Notification pressed');
+          }}
+          onMessagePress={() => {
+            navigation.navigate('MessagesPage' as never);
           }}
         />
       </View>
@@ -1013,6 +1233,17 @@ const ShowBill: React.FC<ShowBillProps> = ({ route }) => {
               <Text style={styles.reviewText}>
                 {showData?.venue_decision ? 'Venue Confirmed' : 'Pending Venue'}
               </Text>
+              {/* Add voting for pending shows */}
+              {showData?.show_status === 'pending' && (
+                <View style={styles.voteOverlayContainer}>
+                  <ShowVoteButton 
+                    showId={showData.show_id}
+                    buttonStyle={styles.overlayVoteButton}
+                    textStyle={styles.overlayVoteButtonText}
+                    countStyle={styles.overlayVoteCount}
+                  />
+                </View>
+              )}
             </LinearGradient>
           </View>
         </Animated.View>
@@ -1136,6 +1367,16 @@ const ShowBill: React.FC<ShowBillProps> = ({ route }) => {
           </TouchableOpacity>
         </View>
       </Modal>
+
+      {/* Backline Application Modal */}
+      <BacklineApplicationModal
+        visible={showBacklineModal}
+        onClose={() => setShowBacklineModal(false)}
+        showId={show_id}
+        onApplicationSubmitted={() => {
+          fetchBacklines(currentUser?.id);
+        }}
+      />
     </View>
   );
 };
@@ -1412,20 +1653,103 @@ const styles = StyleSheet.create({
     color: '#666',
   },
   // Backlines tab styles
+  addBacklineButton: {
+    marginBottom: 15,
+  },
+  addBacklineGradient: {
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    borderRadius: 25,
+    alignItems: 'center',
+  },
+  addBacklineText: {
+    fontSize: 16,
+    fontFamily: 'Amiko-Regular',
+    fontWeight: '600',
+    color: '#fff',
+  },
+  noBacklinesContainer: {
+    alignItems: 'center',
+    paddingVertical: 20,
+  },
+  backlineHintText: {
+    fontSize: 14,
+    fontFamily: 'Amiko-Regular',
+    color: '#999',
+    textAlign: 'center',
+    marginTop: 8,
+    fontStyle: 'italic',
+  },
   backlineItem: {
-    paddingVertical: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: '#f0f0f0',
+    backgroundColor: '#f8f9fa',
+    borderRadius: 10,
+    marginBottom: 12,
+    padding: 15,
+    borderWidth: 1,
+    borderColor: '#e0e0e0',
+  },
+  backlineHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  backlineImage: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    marginRight: 15,
+  },
+  backlineInfo: {
+    flex: 1,
   },
   backlineName: {
     fontSize: 16,
     fontWeight: '600',
     color: '#333',
+    marginBottom: 2,
   },
-  backlineDescription: {
+  backlineType: {
     fontSize: 14,
     color: '#666',
-    marginTop: 2,
+    marginBottom: 2,
+  },
+  backlineStatus: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  backlineActions: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  voteSection: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  voteCount: {
+    fontSize: 14,
+    color: '#666',
+    fontWeight: '600',
+  },
+  voteButton: {
+    backgroundColor: '#ff00ff',
+    paddingHorizontal: 15,
+    paddingVertical: 8,
+    borderRadius: 15,
+  },
+  voteButtonDisabled: {
+    backgroundColor: '#ccc',
+  },
+  voteButtonText: {
+    fontSize: 14,
+    color: '#fff',
+    fontWeight: '600',
+  },
+  votedText: {
+    fontSize: 14,
+    color: '#28a745',
+    fontWeight: '600',
   },
   // Date & Time tab styles
   dateTimeContainer: {
@@ -1609,6 +1933,67 @@ const styles = StyleSheet.create({
   fullScreenImage: {
     width: SCREEN_WIDTH,
     height: SCREEN_HEIGHT * 0.8,
+  },
+  
+  // Vote overlay styles
+  voteOverlayContainer: {
+    marginTop: 8,
+    alignItems: 'center',
+  },
+  overlayVoteButton: {
+    backgroundColor: 'rgba(255, 0, 255, 0.9)',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 20,
+    shadowColor: '#ff00ff',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 8,
+  },
+  overlayVoteButtonText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#fff',
+  },
+  overlayVoteCount: {
+    fontSize: 11,
+    color: 'rgba(255, 255, 255, 0.9)',
+    fontWeight: '600',
+  },
+  
+  // Pending vote section in tabs
+  pendingVoteContainer: {
+    marginTop: 15,
+    padding: 15,
+    backgroundColor: 'rgba(255, 0, 255, 0.1)',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 0, 255, 0.3)',
+    alignItems: 'center',
+  },
+  votePromptText: {
+    fontSize: 14,
+    color: '#ff00ff',
+    marginBottom: 10,
+    fontWeight: '600',
+    textAlign: 'center',
+  },
+  tabVoteButton: {
+    backgroundColor: '#ff00ff',
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 25,
+    minWidth: 100,
+  },
+  tabVoteButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  tabVoteCount: {
+    fontSize: 12,
+    color: '#666',
+    marginTop: 5,
   },
 });
 

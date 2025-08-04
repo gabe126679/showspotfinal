@@ -2,6 +2,7 @@ import React, { useEffect, useState, useRef } from "react";
 import { StyleSheet, View, Dimensions, Text, TouchableOpacity, StatusBar } from "react-native";
 import MapView, { Marker, PROVIDER_GOOGLE } from "react-native-maps";
 import * as Location from "expo-location";
+import { useNavigation } from "@react-navigation/native";
 import { supabase } from "../lib/supabase";
 import ShowSpotHeader from './ShowSpotHeader';
 import { notificationService } from '../services/notificationService';
@@ -10,6 +11,7 @@ import NotificationManager from './NotificationManager';
 const { width, height } = Dimensions.get("window");
 
 const MapHome = () => {
+  const navigation = useNavigation();
   const mapRef = useRef(null);
   const [region, setRegion] = useState(null);
   const [venues, setVenues] = useState([]);
@@ -246,41 +248,9 @@ const MapHome = () => {
     setShowNotifications(true);
   };
 
-  // Handle message press - create test notification
-  const handleMessagePress = async () => {
-    
-    if (!currentUser) {
-      console.error('No current user found');
-      return;
-    }
-
-    try {
-      // Get user's full name first
-      const userName = await notificationService.getUserFullName(currentUser.id);
-      
-      // Create test notification
-      const result = await notificationService.createTestNotification(currentUser.id, userName);
-      
-      if (result.success) {
-        console.log('✅ Test notification created successfully');
-        
-        // Manually trigger toast notification
-        if ((global as any).showNotificationToast) {
-          (global as any).showNotificationToast(result.data);
-        }
-        
-        // Manually refresh unread count
-        if ((global as any).refreshNotificationCount) {
-          setTimeout(() => {
-            (global as any).refreshNotificationCount();
-          }, 500); // Small delay to ensure DB is updated
-        }
-      } else {
-        console.error('❌ Failed to create test notification:', result.error);
-      }
-    } catch (error) {
-      console.error('💥 Error creating test notification:', error);
-    }
+  // Handle message press - navigate to messages page
+  const handleMessagePress = () => {
+    navigation.navigate('MessagesPage' as never);
   };
 
 

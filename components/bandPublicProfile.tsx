@@ -14,6 +14,7 @@ import {
   Platform,
   Vibration,
   Modal,
+  Alert,
 } from "react-native";
 import { PanGestureHandler, State } from 'react-native-gesture-handler';
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -25,6 +26,11 @@ import { useMusicPlayer } from "./player";
 import ShowSpotHeader from "./ShowSpotHeader";
 import SongPurchaseModal from "./SongPurchaseModal";
 import SongUploadForm from "./SongUploadForm";
+import ShowVoteButton from "./ShowVoteButton";
+import RatingModal from "./RatingModal";
+import { ratingService, RatingInfo } from '../services/ratingService';
+import { followerService, FollowerInfo } from '../services/followerService';
+import TipModal from "./TipModal";
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get("window");
 // iPhone 16 specific dimensions for gesture positioning - matching profile.tsx exactly
@@ -112,6 +118,22 @@ const BandPublicProfile: React.FC<BandPublicProfileProps> = ({ route }) => {
   const [isOwner, setIsOwner] = useState(false);
   const [isBandMember, setIsBandMember] = useState(false);
   
+  // Shows data states
+  const [activeShows, setActiveShows] = useState<any[]>([]);
+  const [pendingShows, setPendingShows] = useState<any[]>([]);
+  const [performedShows, setPerformedShows] = useState<any[]>([]);
+  
+  // Rating states
+  const [showRatingModal, setShowRatingModal] = useState(false);
+  const [ratingInfo, setRatingInfo] = useState<RatingInfo | null>(null);
+  
+  // Follower states
+  const [followerInfo, setFollowerInfo] = useState<FollowerInfo | null>(null);
+  const [isFollowing, setIsFollowing] = useState(false);
+  
+  // Tip states
+  const [showTipModal, setShowTipModal] = useState(false);
+  
   // Common states - matching profile.tsx exactly
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -167,6 +189,66 @@ const BandPublicProfile: React.FC<BandPublicProfileProps> = ({ route }) => {
   const handleOpacity = useRef(new Animated.Value(1)).current;
   const nameOpacity = useRef(new Animated.Value(1)).current;
   const fadeAnim = useRef(new Animated.Value(0)).current;
+
+  // Fetch rating info for the band
+  const fetchRatingInfo = async (bandId: string, userId?: string) => {
+    try {
+      const result = await ratingService.getRatingInfo(bandId, 'band', userId);
+      if (result.success && result.data) {
+        setRatingInfo(result.data);
+      }
+    } catch (error) {
+      console.error('Error fetching rating info:', error);
+    }
+  };
+
+  // Handle rating button press
+  const handleRatingPress = () => {
+    if (!currentUser) {
+      Alert.alert('Not Logged In', 'Please log in to rate this band.');
+      return;
+    }
+    setShowRatingModal(true);
+  };
+
+  // Handle rating submitted
+  const handleRatingSubmitted = (newRating: RatingInfo) => {
+    setRatingInfo(newRating);
+  };
+
+  // Fetch follower info for the band
+  const fetchFollowerInfo = async (bandId: string, userId?: string) => {
+    try {
+      const result = await followerService.getFollowerInfo(bandId, 'band', userId);
+      if (result.success && result.data) {
+        setFollowerInfo(result.data);
+        setIsFollowing(result.data.userIsFollowing);
+      }
+    } catch (error) {
+      console.error('Error fetching follower info:', error);
+    }
+  };
+
+  // Handle follow button press
+  const handleFollowPress = async () => {
+    if (!currentUser) {
+      Alert.alert('Not Logged In', 'Please log in to follow this band.');
+      return;
+    }
+
+    try {
+      const result = await followerService.toggleFollow(band_id, 'band', currentUser.id);
+      if (result.success && result.data) {
+        setFollowerInfo(result.data);
+        setIsFollowing(result.data.userIsFollowing);
+      } else {
+        Alert.alert('Error', result.error || 'Failed to update follow status');
+      }
+    } catch (error) {
+      console.error('Error toggling follow:', error);
+      Alert.alert('Error', 'Failed to update follow status');
+    }
+  };
 
   // Fetch band data
   const fetchBandData = async () => {
@@ -263,6 +345,15 @@ const BandPublicProfile: React.FC<BandPublicProfileProps> = ({ route }) => {
         setSongs([]);
       }
 
+      // Fetch shows where this band is a member
+      await fetchBandShows(band_id);
+
+      // Fetch rating info for this band
+      await fetchRatingInfo(band_id, session?.user?.id);
+
+      // Fetch follower info for this band
+      await fetchFollowerInfo(band_id, session?.user?.id);
+
       // Fade in animation - matching profile.tsx
       Animated.timing(fadeAnim, {
         toValue: 1,
@@ -275,6 +366,105 @@ const BandPublicProfile: React.FC<BandPublicProfileProps> = ({ route }) => {
       setError(err instanceof Error ? err.message : "Failed to load band profile");
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Fetch shows where this band is a member
+  const fetchBandShows = async (bandId: string) => {
+    try {
+      console.log('🎭 Fetching shows for band:', bandId);
+      
+      // Get shows for this band (both pending and active)
+      const { data: shows, error: showsError } = await supabase
+        .from('shows')
+        .select(`
+          show_id,
+          show_members,
+          show_venue,
+          show_status,
+          venue_decision,
+          show_date,
+          show_time,
+          show_preferred_date,
+          show_preferred_time,
+          show_ticket_price,
+          created_at,
+          venues:show_venue (
+            venue_name,
+            venue_profile_image
+          )
+        `)
+        .in('show_status', ['pending', 'active', 'sold out']);
+
+      if (!showsError && shows) {
+        // Filter shows where this band is a performer
+        const bandShows = shows.filter(show => {
+          return show.show_members.some((member: any) => {
+            if (member.show_member_type === 'band') {
+              return member.show_member_id === bandId;
+            }
+            return false;
+          });
+        });
+
+        // Separate shows by status
+        const pendingShowsList = bandShows.filter(show => show.show_status === 'pending');
+        const activeShowsList = bandShows.filter(show => show.show_status === 'active' || show.show_status === 'sold out');
+
+        // Format pending shows for display
+        const formattedPendingShows = pendingShowsList.map(show => {
+          const venueName = show.venues?.venue_name || 'TBD';
+          const venueImage = show.venues?.venue_profile_image;
+          
+          return {
+            show_id: show.show_id,
+            title: `Performance @ ${venueName}`,
+            venue_name: venueName,
+            venue_image: venueImage,
+            show_date: show.show_date || show.show_preferred_date,
+            show_time: show.show_time || show.show_preferred_time,
+            ticket_price: show.show_ticket_price,
+            venue_decision: show.venue_decision,
+            show_status: show.show_status,
+            created_at: show.created_at
+          };
+        });
+
+        // Format active shows for display
+        const formattedActiveShows = activeShowsList.map(show => {
+          const venueName = show.venues?.venue_name || 'TBD';
+          const venueImage = show.venues?.venue_profile_image;
+          
+          return {
+            show_id: show.show_id,
+            title: `Performance @ ${venueName}`,
+            venue_name: venueName,
+            venue_image: venueImage,
+            show_date: show.show_date || show.show_preferred_date,
+            show_time: show.show_time || show.show_preferred_time,
+            ticket_price: show.show_ticket_price,
+            venue_decision: show.venue_decision,
+            show_status: show.show_status,
+            created_at: show.created_at
+          };
+        });
+
+        setPendingShows(formattedPendingShows);
+        setActiveShows(formattedActiveShows);
+        setPerformedShows([]); // Will implement later if needed
+        
+        console.log('🎭 Band shows categorized:', {
+          pending: formattedPendingShows.length,
+          active: formattedActiveShows.length
+        });
+      } else if (showsError) {
+        console.log('Shows query failed:', showsError);
+        setPendingShows([]);
+        setActiveShows([]);
+        setPerformedShows([]);
+      }
+    } catch (error) {
+      console.error('Error fetching band shows:', error);
     }
   };
 
@@ -544,6 +734,110 @@ const BandPublicProfile: React.FC<BandPublicProfileProps> = ({ route }) => {
           </View>
         );
 
+      case 'activeShows':
+        return (
+          <View style={styles.tabContent}>
+            <ScrollView 
+              style={styles.showsContainer}
+              showsVerticalScrollIndicator={false}
+              nestedScrollEnabled={true}
+            >
+              {activeShows.length > 0 ? (
+                activeShows.map((show) => (
+                  <TouchableOpacity 
+                    key={show.show_id} 
+                    style={styles.showItem}
+                    onPress={() => navigation.navigate('ShowBill' as never, { show_id: show.show_id } as never)}
+                  >
+                    <View style={styles.showInfo}>
+                      <Text style={styles.showTitle}>{show.venues?.venue_name || 'Unknown Venue'}</Text>
+                      <Text style={styles.showDate}>
+                        {show.show_date || show.show_preferred_date} at {show.show_time || show.show_preferred_time}
+                      </Text>
+                      <Text style={styles.showStatus}>Status: {show.show_status}</Text>
+                    </View>
+                    <Text style={styles.showArrow}>→</Text>
+                  </TouchableOpacity>
+                ))
+              ) : (
+                <Text style={styles.noShowsText}>No active shows</Text>
+              )}
+            </ScrollView>
+          </View>
+        );
+
+      case 'pendingShows':
+        return (
+          <View style={styles.tabContent}>
+            <ScrollView 
+              style={styles.showsContainer}
+              showsVerticalScrollIndicator={false}
+              nestedScrollEnabled={true}
+            >
+              {pendingShows.length > 0 ? (
+                pendingShows.map((show) => (
+                  <TouchableOpacity 
+                    key={show.show_id} 
+                    style={styles.showItem}
+                    onPress={() => navigation.navigate('ShowBill' as never, { show_id: show.show_id } as never)}
+                  >
+                    <View style={styles.showInfo}>
+                      <Text style={styles.showTitle}>{show.venues?.venue_name || 'Unknown Venue'}</Text>
+                      <Text style={styles.showDate}>
+                        {show.show_date || show.show_preferred_date} at {show.show_time || show.show_preferred_time}
+                      </Text>
+                      <Text style={styles.showStatus}>Status: {show.show_status}</Text>
+                    </View>
+                    <View style={styles.voteSection}>
+                      <ShowVoteButton 
+                        showId={show.show_id}
+                        buttonStyle={styles.voteButton}
+                        textStyle={styles.voteButtonText}
+                        countStyle={styles.voteCountText}
+                      />
+                    </View>
+                    <Text style={styles.showArrow}>→</Text>
+                  </TouchableOpacity>
+                ))
+              ) : (
+                <Text style={styles.noShowsText}>No pending shows</Text>
+              )}
+            </ScrollView>
+          </View>
+        );
+
+      case 'performedShows':
+        return (
+          <View style={styles.tabContent}>
+            <ScrollView 
+              style={styles.showsContainer}
+              showsVerticalScrollIndicator={false}
+              nestedScrollEnabled={true}
+            >
+              {performedShows.length > 0 ? (
+                performedShows.map((show) => (
+                  <TouchableOpacity 
+                    key={show.show_id} 
+                    style={styles.showItem}
+                    onPress={() => navigation.navigate('ShowBill' as never, { show_id: show.show_id } as never)}
+                  >
+                    <View style={styles.showInfo}>
+                      <Text style={styles.showTitle}>{show.venues?.venue_name || 'Unknown Venue'}</Text>
+                      <Text style={styles.showDate}>
+                        {show.show_date || show.show_preferred_date} at {show.show_time || show.show_preferred_time}
+                      </Text>
+                      <Text style={styles.showStatus}>Status: {show.show_status}</Text>
+                    </View>
+                    <Text style={styles.showArrow}>→</Text>
+                  </TouchableOpacity>
+                ))
+              ) : (
+                <Text style={styles.noShowsText}>No performed shows</Text>
+              )}
+            </ScrollView>
+          </View>
+        );
+
       case 'info':
         return (
           <View style={styles.tabContent}>
@@ -636,7 +930,7 @@ const BandPublicProfile: React.FC<BandPublicProfileProps> = ({ route }) => {
           console.log('Notification pressed');
         }}
         onMessagePress={() => {
-          console.log('Message pressed');
+          navigation.navigate('MessagesPage' as never);
         }}
         isVenue={false}
       />
@@ -654,13 +948,19 @@ const BandPublicProfile: React.FC<BandPublicProfileProps> = ({ route }) => {
               showsHorizontalScrollIndicator={false}
             >
               {currentData.images.map((item, index) => (
-                <TouchableOpacity key={`band-image-${index}-${item?.substring(item.length - 10) || index}`} onPress={() => handleImagePress(item)}>
-                  <Image 
-                    source={{ uri: item }} 
-                    style={styles.profileImage}
-                    resizeMode="cover"
-                  />
-                </TouchableOpacity>
+                <View key={`band-image-${index}-${item?.substring(item.length - 10) || index}`} style={styles.imageContainer}>
+                  <TouchableOpacity 
+                    style={styles.imageTouch}
+                    onPress={() => handleImagePress(item)}
+                    activeOpacity={0.9}
+                  >
+                    <Image 
+                      source={{ uri: item }} 
+                      style={styles.profileImage}
+                      resizeMode="cover"
+                    />
+                  </TouchableOpacity>
+                </View>
               ))}
             </ScrollView>
           ) : (
@@ -680,6 +980,22 @@ const BandPublicProfile: React.FC<BandPublicProfileProps> = ({ route }) => {
             <Text style={styles.placeholderText}>No Image</Text>
           </LinearGradient>
         )}
+
+        {/* Follow button at top right */}
+        <TouchableOpacity style={styles.followButton} onPress={handleFollowPress}>
+          <LinearGradient
+            colors={isFollowing ? ["#4CAF50", "#45a049"] : ["#ff00ff", "#2a2882"]}
+            style={styles.followButtonGradient}
+          >
+            <Image 
+              source={require('../assets/follow.png')} 
+              style={[styles.followIcon, isFollowing && styles.followingIcon]}
+            />
+            <Text style={styles.followCount}>
+              {followerInfo ? followerInfo.followerCount : 0}
+            </Text>
+          </LinearGradient>
+        </TouchableOpacity>
         
         {/* Name and Rating Overlay - matching profile.tsx exactly */}
         <Animated.View 
@@ -698,29 +1014,58 @@ const BandPublicProfile: React.FC<BandPublicProfileProps> = ({ route }) => {
             </LinearGradient>
           </View>
           
-          {/* Rating on bottom right - bands get ratings */}
-          <View style={styles.ratingContainer}>
+        </Animated.View>
+
+        {/* Rating button - positioned separately for better touch handling */}
+        <TouchableOpacity 
+          style={styles.ratingButton} 
+          onPress={handleRatingPress}
+          activeOpacity={0.7}
+        >
+          <LinearGradient
+            colors={["rgba(0, 0, 0, 0.8)", "rgba(0, 0, 0, 0.4)"]}
+            style={styles.ratingBackground}
+          >
+            <View style={styles.starsRow}>
+              {[1, 2, 3, 4, 5].map((star) => (
+                <Image
+                  key={star}
+                  source={require('../assets/star.png')}
+                  style={[
+                    styles.starIcon,
+                    star <= (ratingInfo ? Math.round(ratingInfo.currentRating) : 5) 
+                      ? styles.filledStar : styles.emptyStar
+                  ]}
+                />
+              ))}
+            </View>
+            <Text style={styles.ratingText}>
+              {ratingInfo ? 
+                `${ratingInfo.currentRating.toFixed(1)} (${ratingInfo.totalRaters})`
+                : '5.0 (0)'
+              }
+            </Text>
+          </LinearGradient>
+        </TouchableOpacity>
+      </Animated.View>
+
+      {/* Tip button - positioned next to rating button */}
+      {!isOwner && (
+        <Animated.View style={[styles.tipButtonContainer, { opacity: nameOpacity }]}>
+          <TouchableOpacity 
+            style={styles.tipButtonOverlay} 
+            onPress={() => setShowTipModal(true)}
+            activeOpacity={0.7}
+          >
             <LinearGradient
               colors={["rgba(0, 0, 0, 0.8)", "rgba(0, 0, 0, 0.4)"]}
-              style={styles.ratingBackground}
+              style={styles.tipButtonBackground}
             >
-              <View style={styles.starsRow}>
-                {[1, 2, 3, 4, 5].map((star) => (
-                  <Image
-                    key={star}
-                    source={require('../assets/star.png')}
-                    style={[
-                      styles.starIcon,
-                      star <= 4 ? styles.filledStar : styles.emptyStar
-                    ]}
-                  />
-                ))}
-              </View>
-              <Text style={styles.ratingText}>4.2</Text>
+              <Text style={styles.tipButtonText}>+</Text>
             </LinearGradient>
-          </View>
+          </TouchableOpacity>
         </Animated.View>
-      </Animated.View>
+      )}
 
       {/* Sliding panel - matching profile.tsx exactly */}
       <Animated.View
@@ -894,6 +1239,24 @@ const BandPublicProfile: React.FC<BandPublicProfileProps> = ({ route }) => {
           console.log('Song purchased successfully');
         }}
       />
+
+      {/* Rating Modal */}
+      <RatingModal
+        visible={showRatingModal}
+        onClose={() => setShowRatingModal(false)}
+        entityId={band_id}
+        entityType="band"
+        entityName={bandData?.band_name || 'Band'}
+        onRatingSubmitted={handleRatingSubmitted}
+      />
+
+      <TipModal
+        visible={showTipModal}
+        onClose={() => setShowTipModal(false)}
+        recipientId={band_id}
+        recipientType="band"
+        recipientName={bandData?.band_name || 'Band'}
+      />
     </View>
   );
 };
@@ -963,6 +1326,14 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     marginTop: -20,//ve image up 15px from natural position
   },
+  imageContainer: {
+    width: SCREEN_WIDTH,
+    height: IMAGE_SECTION_HEIGHT,
+  },
+  imageTouch: {
+    width: '100%',
+    height: '100%',
+  },
   profileImage: {
     width: SCREEN_WIDTH,
     height: IMAGE_SECTION_HEIGHT,
@@ -1014,7 +1385,12 @@ const styles = StyleSheet.create({
     textShadowOffset: { width: 1, height: 1 },
     textShadowRadius: 3,
   },
-  ratingContainer: {
+  ratingButton: {
+    position: 'absolute',
+    bottom: 140, // Position above the collapsed tabs panel
+    right: 20,
+    zIndex: 1000, // High z-index to ensure it's above image touch areas
+    elevation: 10, // Android shadow/elevation
     alignItems: 'flex-end',
   },
   ratingBackground: {
@@ -1051,6 +1427,32 @@ const styles = StyleSheet.create({
     textShadowColor: 'rgba(0, 0, 0, 0.5)',
     textShadowOffset: { width: 1, height: 1 },
     textShadowRadius: 2,
+  },
+  // Tip button styles
+  tipButtonContainer: {
+    position: 'absolute',
+    bottom: 140, // Same as rating button
+    left: 20, // Position on the left side
+    zIndex: 1000,
+    elevation: 10,
+  },
+  tipButtonOverlay: {
+    // Container for touch handling
+  },
+  tipButtonBackground: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minWidth: 40,
+    minHeight: 40,
+  },
+  tipButtonText: {
+    fontSize: 20,
+    color: '#fff',
+    fontWeight: 'bold',
+    textAlign: 'center',
   },
   
   // Sliding panel - matching profile.tsx exactly
@@ -1391,6 +1793,118 @@ const styles = StyleSheet.create({
   },
   backButtonText: {
     fontSize: 18,
+    fontFamily: 'Amiko-Regular',
+    color: '#fff',
+    fontWeight: '600',
+  },
+  // Shows styles
+  showsContainer: {
+    flex: 1,
+  },
+  showItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 12,
+    paddingHorizontal: 15,
+    backgroundColor: '#f8f9fa',
+    marginBottom: 8,
+    borderRadius: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  showInfo: {
+    flex: 1,
+    marginRight: 10,
+  },
+  showTitle: {
+    fontSize: 16,
+    fontFamily: 'Amiko-Regular',
+    color: '#333',
+    fontWeight: '600',
+    marginBottom: 4,
+  },
+  showDate: {
+    fontSize: 14,
+    fontFamily: 'Amiko-Regular',
+    color: '#666',
+    marginBottom: 2,
+  },
+  showStatus: {
+    fontSize: 12,
+    fontFamily: 'Amiko-Regular',
+    color: '#2a2882',
+    fontWeight: '600',
+  },
+  showArrow: {
+    fontSize: 18,
+    color: '#2a2882',
+    fontWeight: 'bold',
+  },
+  noShowsText: {
+    fontSize: 16,
+    fontFamily: 'Amiko-Regular',
+    color: '#666',
+    textAlign: 'center',
+    fontStyle: 'italic',
+    paddingVertical: 20,
+  },
+  
+  // Vote section styles
+  voteSection: {
+    marginLeft: 10,
+    justifyContent: 'center',
+  },
+  voteButton: {
+    backgroundColor: '#ff00ff',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 15,
+    minWidth: 70,
+  },
+  voteButtonText: {
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  voteCountText: {
+    fontSize: 10,
+    color: '#666',
+  },
+  
+  // Follow button styles
+  followButton: {
+    position: 'absolute',
+    top: 40,
+    right: 45,
+    borderRadius: 25,
+    overflow: 'hidden',
+    elevation: 5,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
+    zIndex: 100,
+  },
+  followButtonGradient: {
+    paddingVertical: 10,
+    paddingHorizontal: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  followIcon: {
+    width: 24,
+    height: 24,
+    tintColor: '#fff',
+    marginBottom: 4,
+  },
+  followingIcon: {
+    tintColor: '#fff',
+  },
+  followCount: {
+    fontSize: 14,
     fontFamily: 'Amiko-Regular',
     color: '#fff',
     fontWeight: '600',

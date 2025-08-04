@@ -4,6 +4,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { LinearGradient } from "expo-linear-gradient";
 import { Svg, Path } from 'react-native-svg';
 import { notificationService } from '../services/notificationService';
+import { messagingService } from '../services/messagingService';
 import { supabase } from '../lib/supabase';
 
 const { width: SCREEN_WIDTH } = Dimensions.get("window");
@@ -44,7 +45,9 @@ const ShowSpotHeader: React.FC<ShowSpotHeaderProps> = ({
   isVenue = false,
 }) => {
   const [unreadCount, setUnreadCount] = React.useState(0);
+  const [unreadMessageCount, setUnreadMessageCount] = React.useState(0);
   const [currentUser, setCurrentUser] = React.useState<any>(null);
+  const [currentEntity, setCurrentEntity] = React.useState<{ id: string; type: 'spotter' | 'artist' | 'venue' } | null>(null);
   const gradientColors = isVenue ? ['#FFD700', '#50C878'] : ['#ff00ff', '#2a2882'];
 
   React.useEffect(() => {
@@ -54,19 +57,27 @@ const ShowSpotHeader: React.FC<ShowSpotHeaderProps> = ({
   React.useEffect(() => {
     if (currentUser) {
       fetchUnreadCount();
+      fetchCurrentEntity();
     }
   }, [currentUser]);
 
-  // Manually refresh unread count every 30 seconds
   React.useEffect(() => {
-    if (!currentUser) return;
+    if (currentEntity) {
+      fetchUnreadMessageCount();
+    }
+  }, [currentEntity]);
+
+  // Manually refresh unread counts every 30 seconds
+  React.useEffect(() => {
+    if (!currentUser || !currentEntity) return;
     
     const interval = setInterval(() => {
       fetchUnreadCount();
+      fetchUnreadMessageCount();
     }, 30000); // Check every 30 seconds
 
     return () => clearInterval(interval);
-  }, [currentUser]);
+  }, [currentUser, currentEntity, fetchUnreadCount, fetchUnreadMessageCount]);
 
   const getCurrentUser = async () => {
     try {
@@ -77,6 +88,19 @@ const ShowSpotHeader: React.FC<ShowSpotHeaderProps> = ({
       }
     } catch (error) {
       console.error('Error getting current user in ShowSpotHeader:', error);
+    }
+  };
+
+  const fetchCurrentEntity = async () => {
+    if (!currentUser) return;
+    
+    try {
+      const result = await messagingService.getCurrentEntity(currentUser.id);
+      if (result.success && result.data) {
+        setCurrentEntity(result.data);
+      }
+    } catch (error) {
+      console.error('Error fetching current entity:', error);
     }
   };
 
@@ -92,6 +116,22 @@ const ShowSpotHeader: React.FC<ShowSpotHeaderProps> = ({
       console.error('Error fetching unread count:', error);
     }
   }, [currentUser]);
+
+  const fetchUnreadMessageCount = React.useCallback(async () => {
+    if (!currentEntity) return;
+    
+    try {
+      const result = await messagingService.getUnreadMessageCount(
+        currentEntity.id,
+        currentEntity.type
+      );
+      if (result.success && result.data !== undefined) {
+        setUnreadMessageCount(result.data);
+      }
+    } catch (error) {
+      console.error('Error fetching unread message count:', error);
+    }
+  }, [currentEntity]);
 
   // Expose refresh function for manual updates
   React.useEffect(() => {
@@ -149,6 +189,9 @@ const ShowSpotHeader: React.FC<ShowSpotHeaderProps> = ({
             onPress={onMessagePress}
           >
             <MessageIcon width={24} height={24} color="#fff" />
+            {unreadMessageCount > 0 && (
+              <View style={styles.notificationDot} />
+            )}
           </TouchableOpacity>
         </View>
       </LinearGradient>

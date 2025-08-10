@@ -28,6 +28,7 @@ import RatingModal from "./RatingModal";
 import { ratingService, RatingInfo } from '../services/ratingService';
 import { followerService, FollowerInfo } from '../services/followerService';
 import TipModal from "./TipModal";
+import BetaDisclaimer from "./BetaDisclaimer";
 import { formatShowDateTime } from '../utils/showDateDisplay';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get("window");
@@ -107,6 +108,8 @@ const VenuePublicProfile: React.FC<VenuePublicProfileProps> = ({ route }) => {
   
   // Tip states
   const [showTipModal, setShowTipModal] = useState(false);
+  const [showBetaDisclaimer, setShowBetaDisclaimer] = useState(false);
+  const [pendingAction, setPendingAction] = useState<{type: string, data?: any} | null>(null);
   
   // Common states - matching profile.tsx exactly
   const [loading, setLoading] = useState(true);
@@ -121,6 +124,12 @@ const VenuePublicProfile: React.FC<VenuePublicProfileProps> = ({ route }) => {
   const handleImagePress = (imageUri: string) => {
     setSelectedImage(imageUri);
     setShowImageModal(true);
+  };
+
+  // Handle edit profile images
+  const handleEditImages = () => {
+    setShowImageModal(false);
+    navigation.navigate('VenuePicture' as never);
   };
 
   // Tabs state
@@ -292,6 +301,12 @@ const VenuePublicProfile: React.FC<VenuePublicProfileProps> = ({ route }) => {
       }
 
       if (venue) {
+        console.log('Venue data fetched:', {
+          venue_name: venue.venue_name,
+          venue_profile_image: venue.venue_profile_image,
+          venue_secondary_images: venue.venue_secondary_images,
+          secondary_images_length: venue.venue_secondary_images?.length || 0
+        });
         setVenueData(venue);
       }
 
@@ -420,6 +435,30 @@ const VenuePublicProfile: React.FC<VenuePublicProfileProps> = ({ route }) => {
     }
   };
 
+  // Beta disclaimer handlers
+  const handleBetaAction = (actionType: string, actionData?: any) => {
+    setPendingAction({ type: actionType, data: actionData });
+    setShowBetaDisclaimer(true);
+  };
+
+  const handleBetaProceed = () => {
+    setShowBetaDisclaimer(false);
+    
+    if (pendingAction) {
+      switch (pendingAction.type) {
+        case 'tip':
+          setShowTipModal(true);
+          break;
+      }
+      setPendingAction(null);
+    }
+  };
+
+  const handleBetaCancel = () => {
+    setShowBetaDisclaimer(false);
+    setPendingAction(null);
+  };
+
   useEffect(() => {
     fetchVenueData();
   }, [venue_id]);
@@ -428,12 +467,36 @@ const VenuePublicProfile: React.FC<VenuePublicProfileProps> = ({ route }) => {
   const getCurrentVenueData = () => {
     if (!venueData) return { name: "Venue", images: [] };
     
+    // Ensure URLs are properly formatted
+    const formatImageUrl = (url: string) => {
+      if (!url) return null;
+      // If already a full URL, return as is
+      if (url.startsWith('http://') || url.startsWith('https://')) {
+        return url;
+      }
+      // If it's a storage path, construct the full URL
+      // This shouldn't be needed if getPublicUrl worked correctly, but just in case
+      console.log('Raw image URL from database:', url);
+      return url;
+    };
+
+    // Get profile image
+    const profileImage = formatImageUrl(venueData.venue_profile_image);
+    
+    // Get secondary images, excluding the profile image to avoid duplicates
+    const secondaryImages = (venueData.venue_secondary_images || [])
+      .filter(img => img && img !== venueData.venue_profile_image)
+      .map(formatImageUrl)
+      .filter(Boolean);
+    
+    // Combine profile image first, then secondary images
+    const allImages = profileImage ? [profileImage, ...secondaryImages] : secondaryImages;
+
+    console.log('Venue images for display:', allImages);
+    
     return {
       name: venueData.venue_name,
-      images: [
-        venueData.venue_profile_image, 
-        ...(venueData.venue_secondary_images || [])
-      ].filter(Boolean),
+      images: allImages,
     };
   };
 
@@ -597,7 +660,7 @@ const VenuePublicProfile: React.FC<VenuePublicProfileProps> = ({ route }) => {
           showBackButton={true}
           onBackPress={() => navigation.goBack()}
           onNotificationPress={() => {
-            console.log('Notification pressed');
+            navigation.navigate('NotificationsPage' as never);
           }}
           onMessagePress={() => {
             navigation.navigate('MessagesPage' as never);
@@ -623,7 +686,7 @@ const VenuePublicProfile: React.FC<VenuePublicProfileProps> = ({ route }) => {
           showBackButton={true}
           onBackPress={() => navigation.goBack()}
           onNotificationPress={() => {
-            console.log('Notification pressed');
+            navigation.navigate('NotificationsPage' as never);
           }}
           onMessagePress={() => {
             navigation.navigate('MessagesPage' as never);
@@ -655,7 +718,7 @@ const VenuePublicProfile: React.FC<VenuePublicProfileProps> = ({ route }) => {
           showBackButton={true}
           onBackPress={() => navigation.goBack()}
           onNotificationPress={() => {
-            console.log('Notification pressed');
+            navigation.navigate('NotificationsPage' as never);
           }}
           onMessagePress={() => {
             navigation.navigate('MessagesPage' as never);
@@ -685,7 +748,16 @@ const VenuePublicProfile: React.FC<VenuePublicProfileProps> = ({ route }) => {
                     onPress={() => handleImagePress(imageUri)}
                     activeOpacity={0.9}
                   >
-                    <Image source={{ uri: imageUri }} style={styles.profileImage} />
+                    <Image 
+                      source={{ uri: imageUri }} 
+                      style={styles.profileImage}
+                      onError={(error) => {
+                        console.error(`Image loading error for ${imageUri}:`, error);
+                      }}
+                      onLoad={() => {
+                        console.log(`Image loaded successfully: ${imageUri}`);
+                      }}
+                    />
                   </TouchableOpacity>
                 </View>
               ))
@@ -733,49 +805,37 @@ const VenuePublicProfile: React.FC<VenuePublicProfileProps> = ({ route }) => {
           </View>
         </Animated.View>
 
-        {/* Rating button - positioned separately for better touch handling */}
-        <TouchableOpacity 
-          style={styles.ratingButton} 
-          onPress={handleRatingPress}
-          activeOpacity={0.7}
-        >
-          <LinearGradient
-            colors={["rgba(0, 0, 0, 0.8)", "rgba(0, 0, 0, 0.4)"]}
-            style={styles.ratingBackground}
-          >
-            <Text style={styles.ratingText}>
-              {ratingInfo ? 
-                '★'.repeat(Math.round(ratingInfo.currentRating)) + 
-                '☆'.repeat(5 - Math.round(ratingInfo.currentRating))
-                : '★★★★★'
-              }
-            </Text>
-            <Text style={styles.reviewText}>
-              {ratingInfo ? 
-                `${ratingInfo.currentRating.toFixed(1)} (${ratingInfo.totalRaters} review${ratingInfo.totalRaters !== 1 ? 's' : ''})`
-                : '5.0 (0 reviews)'
-              }
-            </Text>
-          </LinearGradient>
-        </TouchableOpacity>
-
-        {/* Tip button - positioned next to rating button */}
-        {!isOwner && (
-          <Animated.View style={[styles.tipButtonContainer, { opacity: nameOpacity }]}>
+        {/* Instagram-style Action Buttons */}
+        <Animated.View style={[styles.modernActionContainer, { opacity: nameOpacity }]}>
+          {/* Tip button on top - only show if not owner */}
+          {!isOwner && (
             <TouchableOpacity 
-              style={styles.tipButtonOverlay} 
-              onPress={() => setShowTipModal(true)}
+              style={styles.instagramActionButton} 
+              onPress={() => handleBetaAction('tip')}
               activeOpacity={0.7}
             >
-              <LinearGradient
-                colors={["rgba(0, 0, 0, 0.8)", "rgba(0, 0, 0, 0.4)"]}
-                style={styles.tipButtonBackground}
-              >
-                <Text style={styles.tipButtonText}>+</Text>
-              </LinearGradient>
+              <View style={styles.instagramButtonInner}>
+                <Text style={styles.instagramPlusIcon}>+</Text>
+                <Text style={styles.instagramButtonLabel}>Tip</Text>
+              </View>
             </TouchableOpacity>
-          </Animated.View>
-        )}
+          )}
+          
+          {/* Rating button below */}
+          <TouchableOpacity 
+            style={styles.instagramActionButton} 
+            onPress={handleRatingPress}
+            activeOpacity={0.7}
+          >
+            <View style={styles.instagramButtonInner}>
+              <Text style={styles.instagramStarIcon}>☆</Text>
+              <Text style={styles.instagramButtonLabel}>Rating</Text>
+              <Text style={styles.instagramRatingInfo}>
+                {ratingInfo ? ratingInfo.currentRating.toFixed(1) : '0.0'} • {ratingInfo?.totalRaters || 0}
+              </Text>
+            </View>
+          </TouchableOpacity>
+        </Animated.View>
 
         {/* Sliding panel - matching bandPublicProfile.tsx exactly */}
         <Animated.View
@@ -809,21 +869,27 @@ const VenuePublicProfile: React.FC<VenuePublicProfileProps> = ({ route }) => {
             style={styles.tabsContainer}
             bounces={false}
             showsVerticalScrollIndicator={false}
+            contentContainerStyle={{ paddingBottom: 100 }}
           >
-            {tabs.map((tab) => (
-              <View key={tab.id} style={styles.tabSection}>
+            {tabs.map((tab, index) => (
+              <View key={tab.id} style={styles.tabContainer}>
                 <TouchableOpacity
-                  style={styles.tabHeader}
+                  style={[
+                    styles.dropdownTab,
+                    tab.expanded && styles.dropdownTabExpanded,
+                    index === tabs.length - 1 && styles.lastTab,
+                  ]}
                   onPress={() => toggleTab(tab.id)}
+                  activeOpacity={0.7}
                 >
-                  <Text style={styles.tabTitle}>{tab.title}</Text>
-                  <Text style={[styles.tabIcon, { transform: [{ rotate: tab.expanded ? '180deg' : '0deg' }] }]}>
+                  <Text style={styles.dropdownText}>{tab.title}</Text>
+                  <Text style={[styles.arrow, { transform: [{ rotate: tab.expanded ? '180deg' : '0deg' }] }]}>
                     ▼
                   </Text>
                 </TouchableOpacity>
                 
                 {tab.expanded && (
-                  <View style={styles.tabContentExpanded}>
+                  <View style={styles.dropdownContent}>
                     {renderTabContent(tab.id)}
                   </View>
                 )}
@@ -845,12 +911,41 @@ const VenuePublicProfile: React.FC<VenuePublicProfileProps> = ({ route }) => {
           <TouchableOpacity 
             style={styles.imageModalBackground}
             onPress={() => setShowImageModal(false)}
+            activeOpacity={1}
           >
             <Image 
               source={{ uri: selectedImage || '' }} 
               style={styles.fullScreenImage}
               resizeMode="contain"
             />
+            
+            {/* Back button */}
+            <TouchableOpacity 
+              style={styles.backButton}
+              onPress={() => setShowImageModal(false)}
+            >
+              <LinearGradient
+                colors={["rgba(0, 0, 0, 0.8)", "rgba(0, 0, 0, 0.6)"]}
+                style={styles.backButtonGradient}
+              >
+                <Text style={styles.backButtonText}>← Back</Text>
+              </LinearGradient>
+            </TouchableOpacity>
+            
+            {/* Edit button - only show for venue owner */}
+            {isOwner && (
+              <TouchableOpacity 
+                style={styles.editImageButton}
+                onPress={handleEditImages}
+              >
+                <LinearGradient
+                  colors={["#ff00ff", "#2a2882"]}
+                  style={styles.editImageButtonGradient}
+                >
+                  <Text style={styles.editImageButtonText}>Edit Photos</Text>
+                </LinearGradient>
+              </TouchableOpacity>
+            )}
           </TouchableOpacity>
         </View>
       </Modal>
@@ -871,6 +966,14 @@ const VenuePublicProfile: React.FC<VenuePublicProfileProps> = ({ route }) => {
         recipientId={venue_id}
         recipientType="venue"
         recipientName={venueData?.venue_name || 'Venue'}
+      />
+
+      <BetaDisclaimer
+        visible={showBetaDisclaimer}
+        onClose={handleBetaCancel}
+        onProceed={handleBetaProceed}
+        action="tip"
+        itemName={venueData?.venue_name}
       />
     </View>
   );
@@ -1018,35 +1121,44 @@ const styles = StyleSheet.create({
   tabsContainer: {
     flex: 1,
   },
-  tabSection: {
-    marginBottom: 8,
+  tabContainer: {
+    backgroundColor: "#fff",
   },
-  tabHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 15,
+  dropdownTab: {
+    height: TAB_HEIGHT,
+    borderBottomWidth: 1,
+    borderColor: "#f0f0f0",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
     paddingHorizontal: 20,
-    backgroundColor: '#f8f9fa',
-    borderRadius: 8,
-    marginHorizontal: 10,
+    backgroundColor: "#fff",
   },
-  tabTitle: {
+  dropdownTabExpanded: {
+    backgroundColor: "#f8f8f8",
+    borderBottomColor: "#ff00ff",
+  },
+  lastTab: {
+    borderBottomWidth: 0,
+  },
+  dropdownText: {
+    fontSize: 18,
+    fontFamily: "Amiko-Regular",
+    color: "#333",
+    textTransform: "capitalize",
+    fontWeight: "500",
+  },
+  arrow: {
     fontSize: 16,
-    fontFamily: 'Amiko-Regular',
-    color: '#333',
-    fontWeight: '600',
+    color: "#ff00ff",
+    fontWeight: "bold",
   },
-  tabIcon: {
-    fontSize: 14,
-    color: '#666',
-  },
-  tabContentExpanded: {
-    backgroundColor: '#fff',
-    marginHorizontal: 10,
-    borderRadius: 8,
-    marginTop: 4,
-    padding: 15,
+  dropdownContent: {
+    backgroundColor: "#fff",
+    paddingHorizontal: 20,
+    paddingVertical: 15,
+    borderBottomWidth: 1,
+    borderColor: "#f0f0f0",
   },
   tabContent: {
     flex: 1,
@@ -1124,54 +1236,60 @@ const styles = StyleSheet.create({
     fontFamily: 'Audiowide-Regular',
     color: '#fff',
   },
-  ratingButton: {
+  // Modern action buttons styles - matching bandPublicProfile.tsx
+  // Instagram-style action buttons
+  modernActionContainer: {
     position: 'absolute',
-    bottom: 140, // Position above the collapsed tabs panel
+    bottom: 140,
     right: 20,
-    zIndex: 1000, // High z-index to ensure it's above image touch areas
-    elevation: 10, // Android shadow/elevation
-  },
-  ratingBackground: {
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 15,
     alignItems: 'center',
-  },
-  ratingText: {
-    fontSize: 16,
-    color: '#FFD700',
-    marginBottom: 2,
-  },
-  reviewText: {
-    fontSize: 12,
-    color: '#fff',
-    fontFamily: 'Amiko-Regular',
-  },
-  // Tip button styles
-  tipButtonContainer: {
-    position: 'absolute',
-    bottom: 140, // Same as rating button
-    left: 20, // Position on the left side
     zIndex: 1000,
     elevation: 10,
   },
-  tipButtonOverlay: {
-    // Container for touch handling
-  },
-  tipButtonBackground: {
+  instagramActionButton: {
+    backgroundColor: 'transparent',
+    borderWidth: 2,
+    borderColor: '#fff',
+    borderRadius: 8,
     paddingHorizontal: 12,
     paddingVertical: 8,
-    borderRadius: 15,
-    alignItems: 'center',
-    justifyContent: 'center',
-    minWidth: 40,
-    minHeight: 40,
+    minWidth: 60,
+    marginBottom: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    elevation: 5,
   },
-  tipButtonText: {
-    fontSize: 20,
+  instagramButtonInner: {
+    alignItems: 'center',
+  },
+  instagramStarIcon: {
+    fontSize: 24,
     color: '#fff',
-    fontWeight: 'bold',
-    textAlign: 'center',
+    fontWeight: '400',
+    marginBottom: 2,
+  },
+  instagramPlusIcon: {
+    fontSize: 24,
+    color: '#fff',
+    fontWeight: '300',
+    marginBottom: 2,
+  },
+  instagramButtonLabel: {
+    fontSize: 11,
+    color: '#fff',
+    fontWeight: '500',
+    fontFamily: 'Amiko-Regular',
+    marginTop: 2,
+  },
+  instagramRatingInfo: {
+    fontSize: 10,
+    color: '#fff',
+    fontWeight: '400',
+    fontFamily: 'Amiko-Regular',
+    marginTop: 2,
+    opacity: 0.9,
   },
   nameRatingOverlay: {
     position: 'absolute',
@@ -1300,6 +1418,46 @@ const styles = StyleSheet.create({
   voteCountText: {
     fontSize: 10,
     color: '#666',
+  },
+  
+  // Modal button styles - matching profile.tsx
+  backButton: {
+    position: 'absolute',
+    top: 60,
+    left: 20,
+    zIndex: 1000,
+  },
+  backButtonGradient: {
+    paddingHorizontal: 24,
+    paddingVertical: 14,
+    borderRadius: 25,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  backButtonText: {
+    fontSize: 18,
+    fontFamily: 'Amiko-Regular',
+    color: '#fff',
+    fontWeight: '600',
+  },
+  editImageButton: {
+    position: 'absolute',
+    bottom: 60,
+    right: 20,
+    zIndex: 1000,
+  },
+  editImageButtonGradient: {
+    paddingHorizontal: 24,
+    paddingVertical: 14,
+    borderRadius: 25,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  editImageButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontFamily: 'Amiko-Regular',
+    fontWeight: '700',
   },
 });
 

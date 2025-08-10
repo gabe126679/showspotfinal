@@ -36,6 +36,8 @@ const BacklineApplicationModal: React.FC<BacklineApplicationModalProps> = ({
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [userArtistId, setUserArtistId] = useState<string | null>(null);
   const [userBands, setUserBands] = useState<Band[]>([]);
+  const [availableBands, setAvailableBands] = useState<Band[]>([]);
+  const [hasAppliedAsSolo, setHasAppliedAsSolo] = useState(false);
   const [loading, setLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
@@ -83,6 +85,33 @@ const BacklineApplicationModal: React.FC<BacklineApplicationModalProps> = ({
 
         if (!bandsError && bandsData) {
           setUserBands(bandsData);
+          
+          // Get existing backlines for this show to filter out already used options
+          const backlineResult = await backlinesService.getShowBacklines(showId, session.user.id);
+          
+          if (backlineResult.success && backlineResult.data) {
+            const existingBacklines = backlineResult.data;
+            
+            // Check if user already applied as solo artist
+            const soloApplication = existingBacklines.find(
+              bl => bl.backlineArtist === artistData.artist_id && bl.backlineArtistType === 'artist'
+            );
+            setHasAppliedAsSolo(!!soloApplication);
+            
+            // Filter out bands that have already been used for backlines
+            const usedBandIds = existingBacklines
+              .filter(bl => bl.backlineArtistType === 'band')
+              .map(bl => bl.backlineArtist);
+            
+            const availableBandsFiltered = bandsData.filter(
+              band => !usedBandIds.includes(band.band_id)
+            );
+            setAvailableBands(availableBandsFiltered);
+          } else {
+            // If no existing backlines or error, all bands are available
+            setAvailableBands(bandsData);
+            setHasAppliedAsSolo(false);
+          }
         }
       }
     } catch (error) {
@@ -97,10 +126,14 @@ const BacklineApplicationModal: React.FC<BacklineApplicationModalProps> = ({
     try {
       setSubmitting(true);
 
+      // Pass the requesting member's artist_id when applying as a band
+      const requestingMember = artistType === 'band' ? userArtistId : undefined;
+
       const result = await backlinesService.addBacklineApplication(
         showId,
         artistId,
-        artistType
+        artistType,
+        requestingMember
       );
 
       if (result.success) {
@@ -188,20 +221,20 @@ const BacklineApplicationModal: React.FC<BacklineApplicationModalProps> = ({
           <View style={styles.modalBody}>
             <Text style={styles.sectionTitle}>Choose how to apply:</Text>
             
-            {/* Solo Artist Option */}
-            {userArtistId && (
+            {/* Solo Artist Option - only show if user hasn't already applied as solo */}
+            {userArtistId && !hasAppliedAsSolo && (
               <View style={styles.section}>
                 <Text style={styles.sectionSubtitle}>As Solo Artist</Text>
                 {renderOption({ item: null, type: 'solo' })}
               </View>
             )}
 
-            {/* Band Options */}
-            {userBands.length > 0 && (
+            {/* Band Options - only show bands that haven't been used yet */}
+            {availableBands.length > 0 && (
               <View style={styles.section}>
                 <Text style={styles.sectionSubtitle}>As Band Member</Text>
                 <FlatList
-                  data={userBands}
+                  data={availableBands}
                   keyExtractor={(item) => item.band_id}
                   renderItem={({ item }) => renderOption({ item, type: 'band' })}
                   showsVerticalScrollIndicator={false}
@@ -210,10 +243,35 @@ const BacklineApplicationModal: React.FC<BacklineApplicationModalProps> = ({
               </View>
             )}
 
-            {!userArtistId && userBands.length === 0 && (
+            {/* Show appropriate messages based on availability */}
+            {!userArtistId && availableBands.length === 0 && userBands.length === 0 && (
               <View style={styles.noOptionsContainer}>
                 <Text style={styles.noOptionsText}>
                   You need an artist profile or band membership to apply for backlines.
+                </Text>
+              </View>
+            )}
+
+            {(userArtistId || userBands.length > 0) && hasAppliedAsSolo && availableBands.length === 0 && (
+              <View style={styles.noOptionsContainer}>
+                <Text style={styles.noOptionsText}>
+                  You have already applied for backlines with all available options for this show.
+                </Text>
+              </View>
+            )}
+
+            {hasAppliedAsSolo && availableBands.length > 0 && (
+              <View style={styles.infoContainer}>
+                <Text style={styles.infoText}>
+                  You've already applied as a solo artist. You can still apply with your bands.
+                </Text>
+              </View>
+            )}
+
+            {!hasAppliedAsSolo && userArtistId && availableBands.length < userBands.length && (
+              <View style={styles.infoContainer}>
+                <Text style={styles.infoText}>
+                  Some bands are not shown because they've already applied for backlines on this show.
                 </Text>
               </View>
             )}
@@ -336,6 +394,21 @@ const styles = StyleSheet.create({
     color: '#333',
     marginTop: 10,
     textAlign: 'center',
+  },
+  infoContainer: {
+    padding: 15,
+    backgroundColor: '#e8f4f8',
+    borderRadius: 8,
+    marginTop: 10,
+    borderLeftWidth: 4,
+    borderLeftColor: '#2a2882',
+  },
+  infoText: {
+    fontSize: 14,
+    fontFamily: 'Amiko-Regular',
+    color: '#2a2882',
+    textAlign: 'center',
+    lineHeight: 20,
   },
 });
 

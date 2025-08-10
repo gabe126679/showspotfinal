@@ -127,6 +127,9 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
   // Profile type state
   const [activeProfile, setActiveProfile] = useState<ProfileType>('spotter');
   
+  // Image swiping state
+  const [currentImageIndex, setCurrentImageIndex] = useState(0);
+  
   // Common states
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -203,6 +206,7 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
   // Shows data states
   const [activeShows, setActiveShows] = useState<any[]>([]);
   const [pendingShows, setPendingShows] = useState<any[]>([]);
+  const [promotedShows, setPromotedShows] = useState<any[]>([]);
 
   // Purchased songs data
   const [purchasedSongs, setPurchasedSongs] = useState<SongPurchase[]>([]);
@@ -220,6 +224,12 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
   
   // Tickets data
   const [tickets, setTickets] = useState<TicketWithShow[]>([]);
+  
+  // Rating data
+  const [averageRating, setAverageRating] = useState<number | null>(null);
+  
+  // Cashout data
+  const [cashoutAmount, setCashoutAmount] = useState<number>(0);
 
   // Animation refs
   const panelTranslateY = useRef(new Animated.Value(COLLAPSED_TRANSLATE_Y)).current;
@@ -251,7 +261,11 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
         .order("created_at", { ascending: false });
 
       if (activeProfile === 'artist' && artistID) {
-        query = query.eq("artist_id", artistID);
+        // Only get artist's own songs, not band songs
+        query = query
+          .eq("artist_id", artistID)
+          .eq("song_type", "artist")
+          .is("band_id", null); // Explicitly exclude songs with band_id
       } else if (activeProfile === 'spotter') {
         query = query.eq("spotter_id", userId);
       }
@@ -266,7 +280,33 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
         console.log('First song image path:', data[0].song_image);
       }
       
-      setSongs(data || []);
+      // Additional filtering and debugging for artist songs
+      if (activeProfile === 'artist' && data) {
+        const filteredSongs = data.filter(song => {
+          const isValidArtistSong = (
+            song.song_type === 'artist' && 
+            song.artist_id === artistID &&
+            song.band_id === null
+          );
+          
+          if (!isValidArtistSong) {
+            console.log('🚫 Profile: Filtering out song:', {
+              title: song.song_title,
+              song_type: song.song_type,
+              artist_id: song.artist_id,
+              band_id: song.band_id,
+              expected_artist_id: artistID
+            });
+          }
+          
+          return isValidArtistSong;
+        });
+        
+        console.log(`🎵 Profile: Setting ${filteredSongs.length} artist songs (filtered from ${data.length})`);
+        setSongs(filteredSongs);
+      } else {
+        setSongs(data || []);
+      }
     } catch (error) {
       console.error("Error fetching songs:", error);
     }
@@ -316,6 +356,12 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
 
             // Fetch albums for this artist
             await fetchAlbums(artistInfo.artist_id, 'artist');
+            
+            // Fetch ratings for this artist
+            await fetchRatings(artistInfo.artist_id, 'artist');
+            
+            // Fetch cashout amount for this artist
+            await fetchCashoutAmount(artistInfo.artist_id, 'artist');
 
             // Fetch bands for this artist
             const { data: artistBands, error: bandsError } = await supabase
@@ -352,9 +398,18 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
 
             // Fetch shows for this venue
             await fetchVenueShows(venueInfo.venue_id);
+            
+            // Fetch ratings for this venue
+            await fetchRatings(venueInfo.venue_id, 'venue');
+            
+            // Fetch cashout amount for this venue
+            await fetchCashoutAmount(venueInfo.venue_id, 'venue');
           }
         }
 
+        // Fetch promoted shows for spotter profile
+        await fetchPromotedShows(userId);
+        
         // Fetch purchased songs for spotter profile
         await fetchPurchasedSongs(userId);
         
@@ -476,6 +531,31 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
     }
   };
 
+  // Helper function to get the best image for a show (headliner or venue)
+  const getShowImage = (show: any): string => {
+    // First try to get headliner image from show_members (first member is usually headliner)
+    if (show.show_members && Array.isArray(show.show_members) && show.show_members.length > 0) {
+      const headliner = show.show_members[0];
+      if (headliner?.profile_image) {
+        return headliner.profile_image;
+      }
+      if (headliner?.artist_profile_image) {
+        return headliner.artist_profile_image;
+      }
+      if (headliner?.band_profile_image) {
+        return headliner.band_profile_image;
+      }
+    }
+    
+    // Fall back to venue image
+    if (show.venues?.venue_profile_image) {
+      return show.venues.venue_profile_image;
+    }
+    
+    // Default placeholder
+    return 'https://via.placeholder.com/50';
+  };
+
   // Fetch shows for artist profiles
   const fetchArtistShows = async (artistId: string) => {
     try {
@@ -533,7 +613,10 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
       // Get all shows where this venue is the host venue
       const { data: shows, error } = await supabase
         .from('shows')
-        .select('*')
+        .select(`
+          *,
+          venues:show_venue(venue_name, venue_profile_image)
+        `)
         .eq('show_venue', venueId)
         .order('created_at', { ascending: false });
 
@@ -559,6 +642,113 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
       }
     } catch (error) {
       console.error('Error fetching venue shows:', error);
+    }
+  };
+
+  // Fetch promoted shows for spotter profiles
+  const fetchPromotedShows = async (userId: string) => {
+    try {
+      console.log('🎪 Fetching promoted shows for user:', userId);
+      
+      // Get all shows where this user is the promoter
+      const { data: shows, error } = await supabase
+        .from('shows')
+        .select(`
+          *,
+          venues:show_venue(venue_name, venue_profile_image)
+        `)
+        .eq('show_promoter', userId)
+        .order('created_at', { ascending: false });
+
+      if (error) {
+        console.error('Error fetching promoted shows:', error);
+        return;
+      }
+
+      console.log('🎪 Found promoted shows:', shows?.length || 0);
+
+      if (shows) {
+        setPromotedShows(shows);
+        console.log('🎪 Promoted shows loaded:', shows.length);
+      }
+    } catch (error) {
+      console.error('Error fetching promoted shows:', error);
+    }
+  };
+
+  // Fetch cashout amounts from payouts table
+  const fetchCashoutAmount = async (entityId: string, entityType: 'artist' | 'venue') => {
+    try {
+      console.log(`💰 Fetching cashout amount for ${entityType}:`, entityId);
+      
+      // Get all payouts for this entity using correct column names
+      const { data: payouts, error } = await supabase
+        .from('payouts')
+        .select('amount')
+        .eq('recipient_id', entityId)
+        .eq('recipient_type', entityType);
+
+      if (error) {
+        console.error('Error fetching cashout amount:', error);
+        setCashoutAmount(0);
+        return;
+      }
+
+      if (payouts && payouts.length > 0) {
+        // Calculate total cashout amount
+        const total = payouts.reduce((sum, payout) => {
+          // Convert amount to number (it's stored as numeric in DB)
+          const numericAmount = typeof payout.amount === 'string' 
+            ? parseFloat(payout.amount.replace('$', '')) || 0
+            : payout.amount || 0;
+          return sum + numericAmount;
+        }, 0);
+        
+        setCashoutAmount(total);
+        console.log(`💰 Total cashout amount: $${total}`);
+      } else {
+        setCashoutAmount(0);
+        console.log('💰 No cashouts found');
+      }
+    } catch (error) {
+      console.error('Error in fetchCashoutAmount:', error);
+      setCashoutAmount(0);
+    }
+  };
+
+  // Fetch ratings for artist/venue profiles
+  const fetchRatings = async (entityId: string, entityType: 'artist' | 'venue') => {
+    try {
+      console.log(`⭐ Fetching ratings for ${entityType}:`, entityId);
+      
+      // Get rating data for this entity from aggregated ratings table
+      const { data: ratingData, error } = await supabase
+        .from('ratings')
+        .select('current_rating, total_raters')
+        .eq('entity_id', entityId)
+        .eq('entity_type', entityType)
+        .single();
+
+      if (error) {
+        // No rating found is okay, just means not rated yet
+        if (error.code === 'PGRST116') {
+          console.log('⭐ No ratings found');
+          setAverageRating(0);
+        } else {
+          console.error('Error fetching ratings:', error);
+        }
+        return;
+      }
+
+      if (ratingData) {
+        setAverageRating(ratingData.current_rating || 0);
+        console.log(`⭐ Average rating: ${ratingData.current_rating} (${ratingData.total_raters} ratings)`);
+      } else {
+        setAverageRating(0);
+        console.log('⭐ No ratings found');
+      }
+    } catch (error) {
+      console.error('Error fetching ratings:', error);
     }
   };
 
@@ -782,8 +972,85 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
     }
     
     setActiveProfile(profileType);
+    setCurrentImageIndex(0); // Reset image index when switching profiles
     // Close panel when switching profiles
     collapsePanel();
+    
+    // Refetch ratings and cashout for the new profile
+    if (profileType === 'artist' && artistData?.artist_id) {
+      fetchRatings(artistData.artist_id, 'artist');
+      fetchCashoutAmount(artistData.artist_id, 'artist');
+    } else if (profileType === 'venue' && venueData?.venue_id) {
+      fetchRatings(venueData.venue_id, 'venue');
+      fetchCashoutAmount(venueData.venue_id, 'venue');
+    } else if (profileType === 'spotter') {
+      setAverageRating(null); // Spotters don't have ratings
+      setCashoutAmount(0); // Spotters don't have cashouts
+    }
+  };
+
+  // Handle cross-profile swiping at image boundaries
+  const handleImageSwipe = (direction: 'left' | 'right') => {
+    const currentData = getCurrentProfileData();
+    const totalImages = currentData.images.length;
+    
+    if (direction === 'right') {
+      if (currentImageIndex < totalImages - 1) {
+        // Normal image navigation within current profile
+        setCurrentImageIndex(currentImageIndex + 1);
+      } else {
+        // At the end of images, navigate to next profile
+        if (activeProfile === 'spotter') {
+          // Spotter right -> Venue (if user has venue)
+          if (isVenue) {
+            setActiveProfile('venue');
+            setCurrentImageIndex(0);
+            collapsePanel();
+            if (venueData?.venue_id) {
+              fetchRatings(venueData.venue_id, 'venue');
+              fetchCashoutAmount(venueData.venue_id, 'venue');
+            }
+          }
+        } else if (activeProfile === 'artist' && totalImages > 0) {
+          // Artist right -> Spotter 
+          setActiveProfile('spotter');
+          setCurrentImageIndex(0);
+          collapsePanel();
+          setAverageRating(null); // Spotters don't have ratings
+          setCashoutAmount(0); // Spotters don't have cashouts
+        }
+      }
+    } else if (direction === 'left') {
+      if (currentImageIndex > 0) {
+        // Normal image navigation within current profile
+        setCurrentImageIndex(currentImageIndex - 1);
+      } else {
+        // At the beginning of images, navigate to previous profile
+        if (activeProfile === 'venue') {
+          // Venue left -> Spotter
+          setActiveProfile('spotter');
+          setCurrentImageIndex(0);
+          collapsePanel();
+          setAverageRating(null); // Spotters don't have ratings
+          setCashoutAmount(0); // Spotters don't have cashouts
+        } else if (activeProfile === 'spotter') {
+          // Spotter left -> Artist (if user has artist profile)
+          if (isArtist) {
+            setActiveProfile('artist');
+            // Use setTimeout to ensure state updates before calculating index
+            setTimeout(() => {
+              const artistData = getCurrentProfileData();
+              setCurrentImageIndex(Math.max(0, artistData.images.length - 1));
+            }, 0);
+            collapsePanel();
+            if (artistData?.artist_id) {
+              fetchRatings(artistData.artist_id, 'artist');
+              fetchCashoutAmount(artistData.artist_id, 'artist');
+            }
+          }
+        }
+      }
+    }
   };
 
   const handleVenuePress = () => {
@@ -971,48 +1238,58 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
         </LinearGradient>
       </View>
 
-      {/* Profile image section */}
+      {/* Profile image section with swipe navigation */}
       <Animated.View 
         style={[styles.imageSection, { opacity: fadeAnim }]} 
       >
         {currentData.images.length > 0 ? (
-          activeProfile === 'artist' && currentData.images.length > 1 ? (
-            <ScrollView
-              horizontal
-              pagingEnabled
-              showsHorizontalScrollIndicator={false}
-            >
-              {currentData.images.map((item, index) => (
-                <TouchableOpacity key={`profile-image-${index}-${item?.substring(item.length - 10) || index}`} onPress={() => handleImagePress(item, index)}>
-                  <View style={styles.imageWrapper}>
-                    <Image 
-                      source={{ uri: item }} 
-                      style={styles.profileImage}
-                      resizeMode="cover"
-                    />
-                    {/* Small edit indicator */}
-                    <View style={styles.editIndicator}>
-                      <Text style={styles.editIndicatorText}>✎</Text>
-                    </View>
+          <PanGestureHandler
+            onHandlerStateChange={(event) => {
+              if (event.nativeEvent.state === State.END) {
+                const { velocityX, translationX } = event.nativeEvent;
+                
+                // Determine swipe direction based on velocity and translation
+                if (Math.abs(velocityX) > 500 || Math.abs(translationX) > 100) {
+                  if (velocityX > 0 || translationX > 0) {
+                    handleImageSwipe('left');
+                  } else {
+                    handleImageSwipe('right');
+                  }
+                }
+              }
+            }}
+          >
+            <View style={styles.imageContainer}>
+              <TouchableOpacity onPress={() => handleImagePress(currentData.images[currentImageIndex], currentImageIndex)}>
+                <View style={styles.imageWrapper}>
+                  <Image 
+                    source={{ uri: currentData.images[currentImageIndex] }} 
+                    style={styles.profileImage}
+                    resizeMode="cover"
+                  />
+                  {/* Small edit indicator */}
+                  <View style={styles.editIndicator}>
+                    <Text style={styles.editIndicatorText}>✎</Text>
                   </View>
-                </TouchableOpacity>
-              ))}
-            </ScrollView>
-          ) : (
-            <TouchableOpacity onPress={() => handleImagePress(currentData.images[0], 0)}>
-              <View style={styles.imageWrapper}>
-                <Image 
-                  source={{ uri: currentData.images[0] }} 
-                  style={styles.profileImage}
-                  resizeMode="cover"
-                />
-                {/* Small edit indicator */}
-                <View style={styles.editIndicator}>
-                  <Text style={styles.editIndicatorText}>✎</Text>
                 </View>
-              </View>
-            </TouchableOpacity>
-          )
+              </TouchableOpacity>
+              
+              {/* Image indicators */}
+              {currentData.images.length > 1 && (
+                <View style={styles.imageIndicators}>
+                  {currentData.images.map((_, index) => (
+                    <View
+                      key={index}
+                      style={[
+                        styles.indicator,
+                        { opacity: index === currentImageIndex ? 1 : 0.3 }
+                      ]}
+                    />
+                  ))}
+                </View>
+              )}
+            </View>
+          </PanGestureHandler>
         ) : (
           <LinearGradient
             colors={["#ff00ff20", "#2a288220"]}
@@ -1046,19 +1323,25 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
                 colors={["rgba(0, 0, 0, 0.8)", "rgba(0, 0, 0, 0.4)"]}
                 style={styles.ratingBackground}
               >
-                <View style={styles.starsRow}>
-                  {[1, 2, 3, 4, 5].map((star) => (
-                    <Image
-                      key={star}
-                      source={require('../assets/star.png')}
-                      style={[
-                        styles.starIcon,
-                        star <= 4 ? styles.filledStar : styles.emptyStar
-                      ]}
-                    />
-                  ))}
-                </View>
-                <Text style={styles.ratingText}>4.0</Text>
+                {averageRating !== null ? (
+                  <>
+                    <View style={styles.starsRow}>
+                      {[1, 2, 3, 4, 5].map((star) => (
+                        <Image
+                          key={star}
+                          source={require('../assets/star.png')}
+                          style={[
+                            styles.starIcon,
+                            star <= Math.round(averageRating) ? styles.filledStar : styles.emptyStar
+                          ]}
+                        />
+                      ))}
+                    </View>
+                    <Text style={styles.ratingText}>{averageRating.toFixed(1)}</Text>
+                  </>
+                ) : (
+                  <Text style={styles.noRatingText}>No ratings yet</Text>
+                )}
               </LinearGradient>
             </View>
           )}
@@ -1206,6 +1489,34 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
                         </TouchableOpacity>
                       ))}
                     </ScrollView>
+                  ) : tab.id === "promoted" && promotedShows.length > 0 ? (
+                    <ScrollView 
+                      style={styles.showsList}
+                      showsVerticalScrollIndicator={false}
+                      nestedScrollEnabled={true}
+                    >
+                      {promotedShows.map((show) => (
+                        <TouchableOpacity 
+                          key={show.show_id}
+                          style={styles.showItem}
+                          onPress={() => navigation.navigate('ShowBill' as never, { show_id: show.show_id } as never)}
+                        >
+                          <View style={styles.showInfo}>
+                            <Text style={styles.showTitle}>
+                              Show at {show.venues?.venue_name || 'Unknown Venue'}
+                            </Text>
+                            <Text style={styles.showDate}>
+                              {show.show_date || show.show_preferred_date} at {show.show_time || show.show_preferred_time}
+                            </Text>
+                            <Text style={styles.showStatus}>Status: {show.show_status}</Text>
+                            <Text style={styles.showLineup}>
+                              {show.show_members?.length || 0} performer(s)
+                            </Text>
+                          </View>
+                          <Text style={styles.showArrow}>→</Text>
+                        </TouchableOpacity>
+                      ))}
+                    </ScrollView>
                   ) : tab.id === "purchased" && purchasedSongs.length > 0 ? (
                     <ScrollView 
                       style={styles.songsList}
@@ -1280,7 +1591,7 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
                     </ScrollView>
                   ) : tab.id === "activeShows" && activeShows.length > 0 ? (
                     <ScrollView 
-                      style={styles.showsList}
+                      style={styles.showsContainer}
                       showsVerticalScrollIndicator={false}
                       nestedScrollEnabled={true}
                     >
@@ -1290,6 +1601,12 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
                           style={styles.showItem}
                           onPress={() => navigation.navigate('ShowBill' as never, { show_id: show.show_id } as never)}
                         >
+                          <Image
+                            source={{ 
+                              uri: getShowImage(show) 
+                            }}
+                            style={styles.showImage}
+                          />
                           <View style={styles.showInfo}>
                             <Text style={styles.showTitle}>
                               {activeProfile === 'venue' 
@@ -1297,21 +1614,66 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
                                 : `Show at ${show.venues?.venue_name || 'Unknown Venue'}`
                               }
                             </Text>
-                            <Text style={styles.showDate}>
-                              {show.show_date || show.show_preferred_date} at {show.show_time || show.show_preferred_time}
+                            <Text style={styles.showDetails}>
+                              {show.show_date ? new Date(show.show_date).toLocaleDateString() : 'Date TBD'} 
+                              {show.show_time ? ` at ${show.show_time}` : ''}
                             </Text>
-                            <Text style={styles.showStatus}>Status: {show.show_status}</Text>
+                            <Text style={[
+                              styles.showStatus,
+                              { color: show.show_status === 'active' ? '#28a745' : '#6c757d' }
+                            ]}>
+                              {show.show_status?.toUpperCase() || 'ACTIVE'}
+                            </Text>
                             <Text style={styles.showLineup}>
                               {show.show_members?.length || 0} performer(s)
                             </Text>
+                            
+                            {/* Artist/Venue Guarantee Display */}
+                            {activeProfile === 'artist' && artistData?.artist_id && (
+                              (() => {
+                                // Calculate artist guarantee for this show
+                                let guarantee = 0;
+                                if (show.artist_guarantee && Array.isArray(show.artist_guarantee)) {
+                                  const userGuaranteeEntry = show.artist_guarantee.find((entry: any) =>
+                                    entry.payee_artist_id === artistData.artist_id
+                                  );
+                                  if (userGuaranteeEntry && userGuaranteeEntry.payee_payout_amount) {
+                                    const amountStr = userGuaranteeEntry.payee_payout_amount.replace('$', '');
+                                    guarantee = parseFloat(amountStr) || 0;
+                                  }
+                                }
+                                
+                                return guarantee > 0 ? (
+                                  <Text style={styles.guaranteeText}>
+                                    💰 Your Guarantee: ${guarantee.toFixed(2)}
+                                  </Text>
+                                ) : null;
+                              })()
+                            )}
+                            
+                            {activeProfile === 'venue' && venueData?.venue_id && show.venue_percentage && show.venues?.venue_capacity && show.show_ticket_price && (
+                              (() => {
+                                // Calculate venue guarantee for this show
+                                const ticketPrice = show.show_ticket_price;
+                                const venuePercentage = show.venue_percentage || 0;
+                                const capacity = show.venues.venue_capacity;
+                                const maxRevenue = capacity * ticketPrice;
+                                const venueGuarantee = maxRevenue * (venuePercentage / 100);
+                                
+                                return venueGuarantee > 0 ? (
+                                  <Text style={styles.guaranteeText}>
+                                    💰 Your Guarantee: ${venueGuarantee.toFixed(2)} ({venuePercentage}%)
+                                  </Text>
+                                ) : null;
+                              })()
+                            )}
                           </View>
-                          <Text style={styles.showArrow}>→</Text>
                         </TouchableOpacity>
                       ))}
                     </ScrollView>
                   ) : tab.id === "pendingShows" && pendingShows.length > 0 ? (
                     <ScrollView 
-                      style={styles.showsList}
+                      style={styles.showsContainer}
                       showsVerticalScrollIndicator={false}
                       nestedScrollEnabled={true}
                     >
@@ -1321,6 +1683,12 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
                           style={styles.showItem}
                           onPress={() => navigation.navigate('ShowBill' as never, { show_id: show.show_id } as never)}
                         >
+                          <Image
+                            source={{ 
+                              uri: getShowImage(show) 
+                            }}
+                            style={styles.showImage}
+                          />
                           <View style={styles.showInfo}>
                             <Text style={styles.showTitle}>
                               {activeProfile === 'venue' 
@@ -1328,15 +1696,20 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
                                 : `Show at ${show.venues?.venue_name || 'Unknown Venue'}`
                               }
                             </Text>
-                            <Text style={styles.showDate}>
-                              {show.show_date || show.show_preferred_date} at {show.show_time || show.show_preferred_time}
+                            <Text style={styles.showDetails}>
+                              {show.show_date ? new Date(show.show_date).toLocaleDateString() : 'Date TBD'} 
+                              {show.show_time ? ` at ${show.show_time}` : ''}
                             </Text>
-                            <Text style={styles.showStatus}>Status: {show.show_status}</Text>
+                            <Text style={[
+                              styles.showStatus,
+                              { color: show.show_status === 'pending' ? '#ffc107' : '#6c757d' }
+                            ]}>
+                              {show.show_status?.toUpperCase() || 'PENDING'}
+                            </Text>
                             <Text style={styles.showLineup}>
                               {show.show_members?.length || 0} performer(s)
                             </Text>
                           </View>
-                          <Text style={styles.showArrow}>→</Text>
                         </TouchableOpacity>
                       ))}
                     </ScrollView>
@@ -1682,6 +2055,63 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
                         );
                       })}
                     </ScrollView>
+                  ) : tab.id === "info" ? (
+                    <View style={styles.infoContent}>
+                      {activeProfile === 'artist' ? (
+                        <>
+                          <View style={styles.infoRow}>
+                            <Text style={styles.infoLabel}>Artist Name:</Text>
+                            <Text style={styles.infoValue}>{artistData?.artist_name || 'N/A'}</Text>
+                          </View>
+                          <View style={styles.infoRow}>
+                            <Text style={styles.infoLabel}>Genre:</Text>
+                            <Text style={styles.infoValue}>{artistData?.artist_genre || 'Not specified'}</Text>
+                          </View>
+                          <View style={styles.infoRow}>
+                            <Text style={styles.infoLabel}>Bio:</Text>
+                            <Text style={styles.infoValue}>{artistData?.artist_bio || 'No bio available'}</Text>
+                          </View>
+                          <View style={styles.infoRow}>
+                            <Text style={styles.infoLabel}>Total Cashouts:</Text>
+                            <Text style={styles.cashoutAmount}>${cashoutAmount.toFixed(2)}</Text>
+                          </View>
+                        </>
+                      ) : activeProfile === 'venue' ? (
+                        <>
+                          <View style={styles.infoRow}>
+                            <Text style={styles.infoLabel}>Venue Name:</Text>
+                            <Text style={styles.infoValue}>{venueData?.venue_name || 'N/A'}</Text>
+                          </View>
+                          <View style={styles.infoRow}>
+                            <Text style={styles.infoLabel}>Capacity:</Text>
+                            <Text style={styles.infoValue}>{venueData?.venue_capacity || 'Not specified'}</Text>
+                          </View>
+                          <View style={styles.infoRow}>
+                            <Text style={styles.infoLabel}>Location:</Text>
+                            <Text style={styles.infoValue}>{venueData?.venue_location || 'Not specified'}</Text>
+                          </View>
+                          <View style={styles.infoRow}>
+                            <Text style={styles.infoLabel}>Description:</Text>
+                            <Text style={styles.infoValue}>{venueData?.venue_description || 'No description available'}</Text>
+                          </View>
+                          <View style={styles.infoRow}>
+                            <Text style={styles.infoLabel}>Total Cashouts:</Text>
+                            <Text style={styles.cashoutAmount}>${cashoutAmount.toFixed(2)}</Text>
+                          </View>
+                        </>
+                      ) : (
+                        <>
+                          <View style={styles.infoRow}>
+                            <Text style={styles.infoLabel}>Name:</Text>
+                            <Text style={styles.infoValue}>{spotterName || 'N/A'}</Text>
+                          </View>
+                          <View style={styles.infoRow}>
+                            <Text style={styles.infoLabel}>Location:</Text>
+                            <Text style={styles.infoValue}>{spotterLocation || 'Not specified'}</Text>
+                          </View>
+                        </>
+                      )}
+                    </View>
                   ) : (
                     <Text style={styles.tabContentText}>
                       {((activeProfile === 'artist' || activeProfile === 'venue') && isOwner) 
@@ -2224,6 +2654,15 @@ const styles = StyleSheet.create({
     textShadowOffset: { width: 1, height: 1 },
     textShadowRadius: 2,
   },
+  noRatingText: {
+    fontSize: 12,
+    fontFamily: "Amiko-Regular",
+    color: "rgba(255, 255, 255, 0.8)",
+    fontStyle: "italic",
+    textShadowColor: 'rgba(0, 0, 0, 0.5)',
+    textShadowOffset: { width: 1, height: 1 },
+    textShadowRadius: 2,
+  },
   
   // Sliding panel
   scrollablePanel: {
@@ -2324,6 +2763,41 @@ const styles = StyleSheet.create({
     color: "#666",
     textAlign: "center",
     fontStyle: "italic",
+  },
+  // Info content styles
+  infoContent: {
+    paddingVertical: 10,
+  },
+  infoRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 8,
+    paddingHorizontal: 5,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f0f0f0',
+  },
+  infoLabel: {
+    fontSize: 14,
+    fontFamily: 'Amiko-Regular',
+    color: '#666',
+    fontWeight: '600',
+    flex: 1,
+  },
+  infoValue: {
+    fontSize: 14,
+    fontFamily: 'Amiko-Regular',
+    color: '#333',
+    flex: 2,
+    textAlign: 'right',
+  },
+  cashoutAmount: {
+    fontSize: 16,
+    fontFamily: 'Amiko-Regular',
+    color: '#28a745',
+    fontWeight: '700',
+    flex: 2,
+    textAlign: 'right',
   },
   addButton: {
     backgroundColor: "#ff00ff",
@@ -2539,10 +3013,31 @@ const styles = StyleSheet.create({
     fontFamily: 'Amiko-Regular',
     fontWeight: '700',
   },
+  imageContainer: {
+    width: SCREEN_WIDTH,
+    height: IMAGE_SECTION_HEIGHT,
+    position: 'relative',
+  },
   imageWrapper: {
     position: 'relative',
     width: SCREEN_WIDTH,
     height: IMAGE_SECTION_HEIGHT,
+  },
+  imageIndicators: {
+    position: 'absolute',
+    bottom: 20,
+    left: 0,
+    right: 0,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  indicator: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#fff',
+    marginHorizontal: 4,
   },
   editIndicator: {
     position: 'absolute',
@@ -2598,6 +3093,15 @@ const styles = StyleSheet.create({
   // Ticket styles
   showsList: {
     flex: 1,
+  },
+  showsContainer: {
+    flex: 1,
+  },
+  showImage: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    marginRight: 15,
   },
   ticketItem: {
     flexDirection: 'row',
@@ -2660,17 +3164,36 @@ const styles = StyleSheet.create({
     color: '#666',
     marginBottom: 2,
   },
+  showDetails: {
+    fontSize: 14,
+    fontFamily: 'Amiko-Regular',
+    color: '#666',
+    marginBottom: 4,
+  },
   showStatus: {
     fontSize: 12,
     fontFamily: 'Amiko-Regular',
     color: '#2a2882',
     fontWeight: '600',
+    marginBottom: 4,
   },
   showLineup: {
     fontSize: 12,
     fontFamily: 'Amiko-Regular',
     color: '#999',
     marginTop: 2,
+  },
+  guaranteeText: {
+    fontSize: 12,
+    fontFamily: 'Amiko-Regular',
+    color: '#28a745',
+    fontWeight: '600',
+    marginTop: 4,
+    backgroundColor: '#e8f5e8',
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 4,
+    alignSelf: 'flex-start',
   },
   showArrow: {
     fontSize: 18,

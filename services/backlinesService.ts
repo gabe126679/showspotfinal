@@ -1,4 +1,5 @@
 import { supabase } from '../lib/supabase';
+import { notificationService } from './notificationService';
 
 export type BacklineArtistType = 'artist' | 'band';
 
@@ -26,18 +27,65 @@ class BacklinesService {
   async addBacklineApplication(
     showId: string,
     backlineArtist: string,
-    backlineArtistType: BacklineArtistType
+    backlineArtistType: BacklineArtistType,
+    requestingMember?: string
   ): Promise<ServiceResponse<boolean>> {
     try {
       const { data, error } = await supabase
         .rpc('add_backline_application', {
           show_id: showId,
           backline_artist: backlineArtist,
-          backline_artist_type: backlineArtistType
+          backline_artist_type: backlineArtistType,
+          requesting_member: requestingMember || null
         });
 
       if (error) {
         throw new Error(`Failed to add backline application: ${error.message}`);
+      }
+
+      // Send notifications for band backline applications
+      if (backlineArtistType === 'band' && requestingMember) {
+        try {
+          // Get current user info
+          const { data: { user } } = await supabase.auth.getUser();
+          if (user) {
+            const requesterName = await notificationService.getUserFullName(user.id);
+            
+            // Get band name and show data
+            const { data: bandData } = await supabase
+              .from('bands')
+              .select('band_name')
+              .eq('band_id', backlineArtist)
+              .single();
+
+            const { data: showData } = await supabase
+              .from('shows')
+              .select('*, venues!inner(venue_name)')
+              .eq('show_id', showId)
+              .single();
+
+            if (bandData && showData) {
+              const notificationData = {
+                band_id: backlineArtist,
+                venue_name: showData.venues?.venue_name || 'Venue',
+                show_date: showData.show_date || showData.show_preferred_date,
+                show_time: showData.show_time || showData.show_preferred_time
+              };
+
+              await notificationService.createBandBacklineConsensusNotification(
+                requestingMember,
+                requesterName,
+                backlineArtist,
+                bandData.band_name,
+                showId,
+                notificationData
+              );
+            }
+          }
+        } catch (notificationError) {
+          console.error('Error sending backline consensus notifications:', notificationError);
+          // Don't fail the backline application if notifications fail
+        }
       }
 
       return { success: true, data: data };
@@ -94,6 +142,65 @@ class BacklinesService {
 
       if (error) {
         throw new Error(`Failed to update backline consensus: ${error.message}`);
+      }
+
+      // Send notifications based on consensus changes
+      try {
+        // Get the updated backline data to check status
+        const { data: updatedBacklines } = await supabase.rpc('get_show_backlines', {
+          show_id: showId
+        });
+
+        const updatedBackline = updatedBacklines?.find((bl: any) => bl.backline_artist === backlineArtist);
+        
+        if (updatedBackline) {
+          // Get show data for notifications
+          const { data: showData } = await supabase
+            .from('shows')
+            .select('*, venues!inner(venue_name)')
+            .eq('show_id', showId)
+            .single();
+
+          // Get band data
+          const { data: bandData } = await supabase
+            .from('bands')
+            .select('band_name')
+            .eq('band_id', backlineArtist)
+            .single();
+
+          if (showData && bandData) {
+            const notificationData = {
+              band_id: backlineArtist,
+              venue_name: showData.venues?.venue_name || 'Venue',
+              show_date: showData.show_date || showData.show_preferred_date,
+              show_time: showData.show_time || showData.show_preferred_time
+            };
+
+            if (updatedBackline.backline_status === 'active') {
+              // All members approved - send approval notifications
+              await notificationService.createBandBacklineApprovedNotifications(
+                showId,
+                backlineArtist,
+                bandData.band_name,
+                notificationData
+              );
+            } else if (!decision) {
+              // Member rejected - notify the original requester
+              const { data: { user } } = await supabase.auth.getUser();
+              if (user) {
+                const rejecterName = await notificationService.getUserFullName(user.id);
+                
+                // Find the original requester from the backline data
+                // This would need to be stored in the backline_requester field
+                // For now, we'll skip individual rejection notifications
+                console.log('Member rejected backline request');
+              }
+            }
+          }
+        }
+      } catch (notificationError) {
+        console.error('Error sending backline consensus notifications:', notificationError);
+        // Don't fail the consensus update if notifications fail
       }
 
       return { success: true, data: data };
@@ -167,6 +274,75 @@ class BacklinesService {
       return { success: true, data: data || false };
     } catch (error) {
       console.error('Error checking backline vote:', error);
+      return { 
+        success: false, 
+        error: error instanceof Error ? error.message : 'Unknown error occurred' 
+      };
+    }
+  }
+
+  async getBackliningShows(
+    artistId: string,
+    artistType: BacklineArtistType
+  ): Promise<ServiceResponse<any[]>> {
+    try {
+      // Query shows where the artist/band is backlining
+      const { data: showsData, error: showsError } = await supabase
+        .from('shows')
+        .select(`
+          show_id,
+          show_date,
+          show_time,
+          show_preferred_date,
+          show_preferred_time,
+          show_backlines,
+          show_status,
+          venue_decision,
+          venues!inner(
+            venue_name,
+            venue_profile_image
+          )
+        `);
+
+      if (showsError) {
+        throw new Error(`Failed to get backlining shows: ${showsError.message}`);
+      }
+
+      // Filter shows where the artist/band is backlining
+      const backliningShows = (showsData || []).filter(show => {
+        if (!show.show_backlines) return false;
+        
+        // Parse backlines if it's a string
+        let backlines;
+        try {
+          backlines = typeof show.show_backlines === 'string' 
+            ? JSON.parse(show.show_backlines) 
+            : show.show_backlines;
+        } catch (e) {
+          return false;
+        }
+
+        if (!Array.isArray(backlines)) return false;
+
+        // Check if artist/band is in the backlines
+        return backlines.some((backline: any) => 
+          backline.backline_artist === artistId && 
+          backline.backline_artist_type === artistType &&
+          backline.backline_status === 'active' // Only show active backlines
+        );
+      }).map(show => ({
+        show_id: show.show_id,
+        show_date: show.show_date || show.show_preferred_date,
+        show_time: show.show_time || show.show_preferred_time,
+        venue_name: show.venues.venue_name,
+        venue_profile_image: show.venues.venue_profile_image,
+        show_status: show.show_status,
+        venue_decision: show.venue_decision,
+      }));
+
+      return { success: true, data: backliningShows };
+    } catch (error) {
+      console.error('Error getting backlining shows:', error);
       return { 
         success: false, 
         error: error instanceof Error ? error.message : 'Unknown error occurred' 

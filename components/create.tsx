@@ -64,8 +64,8 @@ interface CombinedArtistBand {
 const Create = () => {
   const navigation = useNavigation();
   
-  // Mode toggle state
-  const [activeMode, setActiveMode] = useState<'band' | 'show'>('band');
+  // App flow states - determines which screen to show
+  const [currentFlow, setCurrentFlow] = useState<'selection' | 'band_wizard' | 'show_wizard'>('selection');
   
   // Band formation states
   const [bandName, setBandName] = useState('');
@@ -145,11 +145,11 @@ const Create = () => {
       } else if (venueData) {
         setIsArtist(false);
         setUserType('venue');
-        setActiveMode('show'); // Venues can only promote shows
+        setCurrentFlow('show_wizard'); // Venues go directly to show wizard
       } else {
         setIsArtist(false);
         setUserType('spotter');
-        setActiveMode('show'); // Spotters can only promote shows
+        setCurrentFlow('show_wizard'); // Spotters go directly to show wizard
       }
     } catch (error) {
       console.error('Error checking artist status:', error);
@@ -618,134 +618,199 @@ const Create = () => {
     }
   };
 
-  // Render mode toggle for artists
-  const renderModeToggle = () => {
-    if (userType !== 'artist') return null;
-    
+  // Render selection screen for artists
+  const renderSelectionScreen = () => {
     return (
-      <View style={styles.modeToggle}>
-        <TouchableOpacity
-          style={[styles.toggleButton, activeMode === 'band' && styles.toggleButtonActive]}
-          onPress={() => setActiveMode('band')}
-        >
-          <Text style={[styles.toggleButtonText, activeMode === 'band' && styles.toggleButtonTextActive]}>
-            Form Band
-          </Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.toggleButton, activeMode === 'show' && styles.toggleButtonActive]}
-          onPress={() => setActiveMode('show')}
-        >
-          <Text style={[styles.toggleButtonText, activeMode === 'show' && styles.toggleButtonTextActive]}>
-            Promote Show
-          </Text>
-        </TouchableOpacity>
-      </View>
+      <ScrollView style={styles.selectionScrollContainer} showsVerticalScrollIndicator={false}>
+        <View style={styles.selectionContainer}>
+          <Text style={styles.selectionTitle}>What would you like to do?</Text>
+          <Text style={styles.selectionSubtitle}>Choose your next step</Text>
+          
+          <View style={styles.optionsContainer}>
+            <TouchableOpacity 
+              style={styles.optionCard}
+              onPress={() => setCurrentFlow('band_wizard')}
+              activeOpacity={0.8}
+            >
+              <View style={styles.optionIcon}>
+                <Text style={styles.optionEmoji}>🎸</Text>
+              </View>
+              <Text style={styles.optionTitle}>Form a Band</Text>
+              <Text style={styles.optionDescription}>
+                Create a musical collective with other artists
+              </Text>
+              <View style={styles.optionButton}>
+                <Text style={styles.optionButtonText}>Get Started</Text>
+              </View>
+            </TouchableOpacity>
+            
+            <TouchableOpacity 
+              style={styles.optionCard}
+              onPress={() => setCurrentFlow('show_wizard')}
+              activeOpacity={0.8}
+            >
+              <View style={styles.optionIcon}>
+                <Text style={styles.optionEmoji}>🎪</Text>
+              </View>
+              <Text style={styles.optionTitle}>Promote a Show</Text>
+              <Text style={styles.optionDescription}>
+                Organize a live music event and build the lineup
+              </Text>
+              <View style={styles.optionButton}>
+                <Text style={styles.optionButtonText}>Get Started</Text>
+              </View>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </ScrollView>
     );
   };
 
-  // Render band formation form
-  const renderBandForm = () => (
-    <>
-      <Text style={styles.title}>Form a Band</Text>
-      
-      {/* Band Name */}
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Band Name</Text>
-        <TextInput
-          style={styles.input}
-          placeholder="Enter band name"
-          placeholderTextColor="#b4b3b3"
-          value={bandName}
-          onChangeText={setBandName}
-        />
-      </View>
-
-      {/* Members Section */}
-      <View style={styles.membersSection}>
-        <Text style={styles.sectionTitle}>Members ({selectedMembers.length})</Text>
+  // Render full-screen band wizard
+  const renderBandWizard = () => (
+    <ScrollView style={styles.wizardScrollContainer} showsVerticalScrollIndicator={false}>
+      <View style={styles.wizardContainer}>
+        <View style={styles.wizardHeader}>
+          <TouchableOpacity 
+            style={styles.backButton}
+            onPress={() => setCurrentFlow('selection')}
+          >
+            <Text style={styles.backButtonText}>← Back</Text>
+          </TouchableOpacity>
+        </View>
         
-        {/* Selected Members - Use ScrollView for this smaller list */}
-        <ScrollView style={styles.selectedMembersContainer} showsVerticalScrollIndicator={false}>
-          {selectedMembers.map((member, index) => (
-            <View key={member.artist_id} style={styles.memberItem}>
-              <View style={styles.memberInfo}>
-                <Text style={styles.memberName}>
-                  {member.artist_name}
-                  {index === 0 && <Text style={styles.creatorLabel}> (You - Creator)</Text>}
-                </Text>
-              </View>
-              {index !== 0 && (
-                <TouchableOpacity 
-                  style={styles.removeButton}
-                  onPress={() => removeMember(member.artist_id)}
-                >
-                  <Text style={styles.removeButtonText}>×</Text>
-                </TouchableOpacity>
-              )}
-            </View>
-          ))}
-        </ScrollView>
+        <Text style={styles.wizardTitle}>Form a Band</Text>
+        <Text style={styles.wizardSubtitle}>Create your musical collective</Text>
+        
+        {/* Band Name Step */}
+        <View style={styles.wizardStepContainer}>
+          <Text style={styles.wizardStepTitle}>🎸 Band Details</Text>
+          <View style={styles.inputContainer}>
+            <Text style={styles.inputLabel}>Band Name</Text>
+            <TextInput
+              style={styles.wizardInput}
+              placeholder="Enter your band name"
+              placeholderTextColor="#999"
+              value={bandName}
+              onChangeText={setBandName}
+            />
+          </View>
+        </View>
 
-        {/* Add Member Search */}
-        <View style={styles.addMemberSection}>
-          <TextInput
-            style={styles.searchInput}
-            placeholder="Search for artists to add..."
-            placeholderTextColor="#b4b3b3"
-            value={searchQuery}
-            onChangeText={setSearchQuery}
-          />
+        {/* Members Step */}
+        <View style={styles.wizardStepContainer}>
+          <Text style={styles.wizardStepTitle}>🎤 Band Members ({selectedMembers.length})</Text>
           
-          {searching && (
-            <View style={styles.searchingIndicator}>
-              <ActivityIndicator size="small" color="#2a2882" />
-              <Text style={styles.searchingText}>Searching...</Text>
-            </View>
-          )}
-
-          {searchQuery.length >= 2 && !searching && searchResults.length === 0 && (
-            <View style={styles.noResultsContainer}>
-              <Text style={styles.noResultsText}>No available artists found for "{searchQuery}"</Text>
-              <Text style={styles.noResultsSubtext}>(Already selected artists are hidden)</Text>
-            </View>
-          )}
-          
-          {searchResults.length > 0 && (
-            <View style={styles.searchResultsContainer}>
-              {searchResults.map((item) => (
-                <TouchableOpacity
-                  key={item.artist_id}
-                  style={styles.searchResultItem}
-                  onPress={() => addMember(item)}
-                >
-                  <Text style={styles.searchResultName}>{item.artist_name}</Text>
-                  <Text style={styles.addText}>+</Text>
-                </TouchableOpacity>
+          {/* Current Members */}
+          {selectedMembers.length > 0 && (
+            <View style={styles.currentMembersContainer}>
+              <Text style={styles.membersListTitle}>Current Members</Text>
+              {selectedMembers.map((member, index) => (
+                <View key={member.artist_id} style={styles.memberCard}>
+                  <View style={styles.memberCardInfo}>
+                    <View style={styles.memberBadge}>
+                      <Text style={styles.memberBadgeText}>
+                        {index === 0 ? '👑' : '🎵'}
+                      </Text>
+                    </View>
+                    <View style={styles.memberDetails}>
+                      <Text style={styles.memberCardName}>{member.artist_name}</Text>
+                      <Text style={styles.memberCardRole}>
+                        {index === 0 ? 'Band Creator' : 'Member'}
+                      </Text>
+                    </View>
+                  </View>
+                  {index !== 0 && (
+                    <TouchableOpacity 
+                      style={styles.removeMemberButton}
+                      onPress={() => removeMember(member.artist_id)}
+                    >
+                      <Text style={styles.removeMemberButtonText}>✕</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
               ))}
             </View>
           )}
+
+          {/* Add Member Search */}
+          <View style={styles.searchSection}>
+            <Text style={styles.searchSectionTitle}>Add New Member</Text>
+            <TextInput
+              style={styles.wizardInput}
+              placeholder="Search for artists to invite..."
+              placeholderTextColor="#999"
+              value={searchQuery}
+              onChangeText={setSearchQuery}
+            />
+          
+            {searching && (
+              <View style={styles.searchingIndicator}>
+                <ActivityIndicator size="small" color="#2a2882" />
+                <Text style={styles.searchingText}>Searching artists...</Text>
+              </View>
+            )}
+            
+            {searchQuery.length >= 2 && !searching && searchResults.length === 0 && (
+              <View style={styles.noResultsContainer}>
+                <Text style={styles.noResultsText}>No artists found for "{searchQuery}"</Text>
+                <Text style={styles.noResultsSubtext}>Try a different search term</Text>
+              </View>
+            )}
+            
+            {searchResults.length > 0 && (
+              <View style={styles.searchResultsContainer}>
+                <Text style={styles.searchResultsTitle}>Available Artists</Text>
+                {searchResults.map((item) => (
+                  <TouchableOpacity
+                    key={item.artist_id}
+                    style={styles.searchResultCard}
+                    onPress={() => addMember(item)}
+                  >
+                    <View style={styles.searchResultInfo}>
+                      <Text style={styles.searchResultName}>{item.artist_name}</Text>
+                      <Text style={styles.searchResultLabel}>Artist</Text>
+                    </View>
+                    <View style={styles.addMemberButton}>
+                      <Text style={styles.addMemberButtonText}>Add</Text>
+                    </View>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
+          </View>
+        </View>
+
+        {/* Create Band Action */}
+        <View style={styles.wizardStepContainer}>
+          <View style={styles.createBandSection}>
+            <Text style={styles.createBandInfo}>
+              Ready to form your band? You'll need at least 2 members including yourself.
+            </Text>
+            <TouchableOpacity
+              style={[
+                styles.wizardActionButton, 
+                (!bandName.trim() || selectedMembers.length < 2) && styles.wizardActionButtonDisabled,
+                loading && styles.wizardActionButtonDisabled
+              ]}
+              onPress={handleCreateBand}
+              disabled={!bandName.trim() || selectedMembers.length < 2 || loading}
+            >
+              {loading ? (
+                <ActivityIndicator color="#fff" size="small" />
+              ) : (
+                <Text style={styles.wizardActionButtonText}>
+                  Create Band ({selectedMembers.length} members)
+                </Text>
+              )}
+            </TouchableOpacity>
+          </View>
         </View>
       </View>
-
-      {/* Create Button */}
-      <View style={styles.createButtonContainer}>
-        <TouchableOpacity
-          style={[styles.createButton, loading && styles.buttonDisabled]}
-          onPress={handleCreateBand}
-          disabled={loading}
-        >
-          {loading ? (
-            <ActivityIndicator color="#fff" />
-          ) : (
-            <Text style={styles.createButtonText}>Create Band</Text>
-          )}
-        </TouchableOpacity>
-      </View>
-    </>
+    </ScrollView>
   );
 
-  // Render step-by-step show wizard
+  // Render full-screen show wizard
   const renderShowWizard = () => {
     const stepTitles = [
       '📍 Select Venue',
@@ -756,50 +821,78 @@ const Create = () => {
     ];
 
     return (
-      <View style={styles.wizardContainer}>
-        {/* Progress Header */}
-        <View style={styles.progressHeader}>
+      <ScrollView style={styles.wizardScrollContainer} showsVerticalScrollIndicator={false}>
+        <View style={styles.wizardContainer}>
+          <View style={styles.wizardHeader}>
+            <TouchableOpacity 
+              style={styles.backButton}
+              onPress={() => {
+                if (currentStep === 1 && userType === 'artist') {
+                  setCurrentFlow('selection');
+                } else if (currentStep > 1) {
+                  prevStep();
+                } else {
+                  navigation.goBack();
+                }
+              }}
+            >
+              <Text style={styles.backButtonText}>
+                {currentStep === 1 && userType === 'artist' ? '← Back' : currentStep > 1 ? '← Previous' : '← Back'}
+              </Text>
+            </TouchableOpacity>
+          </View>
+          
           <Text style={styles.wizardTitle}>Promote a Show</Text>
-          <View style={styles.progressContainer}>
+          <Text style={styles.wizardSubtitle}>Step {currentStep} of {totalSteps}</Text>
+          
+          {/* Progress Indicator */}
+          <View style={styles.progressIndicator}>
             <View style={styles.progressBar}>
               <View 
                 style={[styles.progressFill, { width: `${(currentStep / totalSteps) * 100}%` }]}
               />
             </View>
-            <Text style={styles.progressText}>Step {currentStep} of {totalSteps}</Text>
           </View>
-          <Text style={styles.stepTitle}>{stepTitles[currentStep - 1]}</Text>
-        </View>
 
-        {/* Step Content */}
-        <ScrollView style={styles.stepContent} showsVerticalScrollIndicator={false}>
-          {currentStep === 1 && renderVenueStep()}
-          {currentStep === 2 && renderLineupStep()}
-          {currentStep === 3 && renderDateTimeStep()}
-          {currentStep === 4 && renderReviewStep()}
-          {currentStep === 5 && renderSubmitStep()}
-        </ScrollView>
+          {/* Current Step Content */}
+          <View style={styles.wizardStepContainer}>
+            <Text style={styles.wizardStepTitle}>{stepTitles[currentStep - 1]}</Text>
+            
+            {currentStep === 1 && renderVenueStep()}
+            {currentStep === 2 && renderLineupStep()}
+            {currentStep === 3 && renderDateTimeStep()}
+            {currentStep === 4 && renderReviewStep()}
+            {currentStep === 5 && renderSubmitStep()}
+          </View>
 
-        {/* Navigation Footer */}
-        <View style={styles.navigationFooter}>
-          {currentStep > 1 && (
-            <TouchableOpacity style={styles.backButton} onPress={prevStep}>
-              <Text style={styles.backButtonText}>← Back</Text>
-            </TouchableOpacity>
+          {/* Navigation */}
+          {currentStep < 5 && (
+            <View style={styles.wizardNavigation}>
+              {currentStep > 1 && (
+                <TouchableOpacity 
+                  style={styles.wizardNavButton} 
+                  onPress={prevStep}
+                >
+                  <Text style={styles.wizardNavButtonText}>Previous</Text>
+                </TouchableOpacity>
+              )}
+              <TouchableOpacity 
+                style={[
+                  styles.wizardNavButton, 
+                  styles.wizardNextButton,
+                  !canProceedFromStep(currentStep) && styles.wizardNavButtonDisabled
+                ]} 
+                onPress={nextStep}
+                disabled={!canProceedFromStep(currentStep)}
+              >
+                <Text style={styles.wizardNavButtonText}>
+                  {currentStep === totalSteps - 1 ? 'Review' : 'Next'}
+                </Text>
+              </TouchableOpacity>
+            </View>
           )}
-          
-          {currentStep < totalSteps && (
-            <TouchableOpacity 
-              style={[styles.nextButton, !canProceedFromStep(currentStep) && styles.buttonDisabled]} 
-              onPress={nextStep}
-              disabled={!canProceedFromStep(currentStep)}
-            >
-              <Text style={styles.nextButtonText}>Next →</Text>
-            </TouchableOpacity>
-          )}
         </View>
-
-      </View>
+      </ScrollView>
     );
   };
 
@@ -1035,12 +1128,11 @@ const Create = () => {
         </Text>
       </View>
 
-      {/* Revenue Split */}
+      {/* Promoter Benefits */}
       <View style={styles.reviewSection}>
-        <Text style={styles.reviewSectionTitle}>💰 Revenue Split</Text>
-        <Text style={styles.reviewText}>Venue: Up to 30%</Text>
-        <Text style={styles.reviewText}>Artists: 70%+</Text>
-        <Text style={styles.reviewNote}>Final pricing set by venue upon acceptance</Text>
+        <Text style={styles.reviewSectionTitle}>🚀 Promoter Benefits</Text>
+        <Text style={styles.reviewText}>Building your promoter reputation</Text>
+        <Text style={styles.upgradeMessage}>💎 Promote 10 successful shows and receive a promoter upgrade!</Text>
       </View>
     </View>
   );
@@ -1070,14 +1162,27 @@ const Create = () => {
     </View>
   );
 
+  // Main render logic
+  const renderCurrentFlow = () => {
+    switch (currentFlow) {
+      case 'selection':
+        return renderSelectionScreen();
+      case 'band_wizard':
+        return renderBandWizard();
+      case 'show_wizard':
+        return renderShowWizard();
+      default:
+        return renderSelectionScreen();
+    }
+  };
+
   return (
     <SafeAreaView style={styles.container}>
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         style={styles.keyboardView}
       >
-        {renderModeToggle()}
-        {activeMode === 'band' ? renderBandForm() : renderShowWizard()}
+        {renderCurrentFlow()}
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
@@ -1335,7 +1440,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 14,
     fontSize: 16,
-    color: '#333',
+    color: '#333', // Added text color
     marginBottom: 15,
   },
   selectedCard: {
@@ -1510,7 +1615,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 12,
     fontSize: 16,
-    color: '#333',
+    color: '#333', // Added text color
     marginBottom: 5,
   },
   inputHelper: {
@@ -1557,6 +1662,13 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#6c757d',
     fontStyle: 'italic',
+    marginTop: 8,
+  },
+  upgradeMessage: {
+    fontSize: 14,
+    color: '#ff00ff',
+    fontWeight: '600',
+    textAlign: 'center',
     marginTop: 8,
   },
   submitContainer: {
@@ -1649,6 +1761,348 @@ const styles = StyleSheet.create({
   },
   positionText: {
     color: '#fff',
+    fontSize: 14,
+    fontWeight: 'bold',
+  },
+  // Selection Screen Styles
+  selectionScrollContainer: {
+    flex: 1,
+    backgroundColor: '#2a2882',
+  },
+  selectionContainer: {
+    flex: 1,
+    padding: 20,
+    minHeight: '100%',
+    justifyContent: 'center',
+  },
+  selectionTitle: {
+    color: '#fff',
+    fontSize: 28,
+    fontWeight: 'bold',
+    textAlign: 'center',
+    marginBottom: 10,
+  },
+  selectionSubtitle: {
+    color: 'rgba(255, 255, 255, 0.8)',
+    fontSize: 16,
+    textAlign: 'center',
+    marginBottom: 50,
+  },
+  optionsContainer: {
+    gap: 20,
+  },
+  optionCard: {
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    borderRadius: 20,
+    padding: 30,
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: 'rgba(255, 255, 255, 0.2)',
+  },
+  optionIcon: {
+    marginBottom: 15,
+  },
+  optionEmoji: {
+    fontSize: 40,
+  },
+  optionTitle: {
+    color: '#fff',
+    fontSize: 24,
+    fontWeight: 'bold',
+    textAlign: 'center',
+    marginBottom: 10,
+  },
+  optionDescription: {
+    color: 'rgba(255, 255, 255, 0.8)',
+    fontSize: 16,
+    textAlign: 'center',
+    lineHeight: 22,
+    marginBottom: 20,
+  },
+  optionButton: {
+    backgroundColor: '#ff00ff',
+    paddingHorizontal: 30,
+    paddingVertical: 12,
+    borderRadius: 25,
+  },
+  optionButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  
+  // Wizard Header Styles
+  wizardHeader: {
+    flexDirection: 'row',
+    justifyContent: 'flex-start',
+    alignItems: 'center',
+    marginBottom: 20,
+    marginTop: 10,
+  },
+  backButton: {
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    paddingHorizontal: 15,
+    paddingVertical: 8,
+    borderRadius: 20,
+  },
+  backButtonText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+
+  // New Wizard Styles - Following VenueAcceptanceWizard Pattern
+  wizardScrollContainer: {
+    flex: 1,
+    backgroundColor: '#2a2882',
+  },
+  wizardContainer: {
+    flex: 1,
+    padding: 20,
+    minHeight: '100%',
+  },
+  wizardTitle: {
+    color: '#fff',
+    fontSize: 24,
+    fontWeight: 'bold',
+    marginBottom: 8,
+    textAlign: 'center',
+    marginTop: 50,
+  },
+  wizardSubtitle: {
+    color: '#fff',
+    fontSize: 16,
+    textAlign: 'center',
+    marginBottom: 30,
+  },
+  progressIndicator: {
+    marginBottom: 30,
+  },
+  progressBar: {
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    height: 4,
+    borderRadius: 2,
+    overflow: 'hidden',
+  },
+  progressFill: {
+    backgroundColor: '#ff00ff',
+    height: '100%',
+    borderRadius: 2,
+  },
+  wizardStepContainer: {
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    borderRadius: 15,
+    padding: 20,
+    marginBottom: 30,
+  },
+  wizardStepTitle: {
+    color: '#fff',
+    fontSize: 20,
+    fontWeight: 'bold',
+    marginBottom: 20,
+    textAlign: 'center',
+  },
+  inputContainer: {
+    marginBottom: 20,
+  },
+  inputLabel: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
+    marginBottom: 8,
+  },
+  // Removed duplicate wizardInput style that had white text
+  currentMembersContainer: {
+    marginBottom: 20,
+  },
+  membersListTitle: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
+    marginBottom: 15,
+    textAlign: 'center',
+  },
+  memberCard: {
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    borderRadius: 10,
+    padding: 15,
+    marginBottom: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  memberCardInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
+  memberBadge: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
+  },
+  memberBadgeText: {
+    fontSize: 20,
+  },
+  memberDetails: {
+    flex: 1,
+  },
+  memberCardName: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
+    marginBottom: 2,
+  },
+  memberCardRole: {
+    color: 'rgba(255, 255, 255, 0.7)',
+    fontSize: 14,
+  },
+  removeMemberButton: {
+    backgroundColor: 'rgba(220, 53, 69, 0.8)',
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  removeMemberButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  searchSection: {
+    marginTop: 10,
+  },
+  searchSectionTitle: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
+    marginBottom: 12,
+  },
+  searchingIndicator: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 15,
+  },
+  searchingText: {
+    color: 'rgba(255, 255, 255, 0.8)',
+    fontSize: 14,
+    marginLeft: 8,
+  },
+  noResultsContainer: {
+    paddingVertical: 20,
+    alignItems: 'center',
+  },
+  noResultsText: {
+    color: 'rgba(255, 255, 255, 0.8)',
+    fontSize: 16,
+    textAlign: 'center',
+    marginBottom: 4,
+  },
+  noResultsSubtext: {
+    color: 'rgba(255, 255, 255, 0.6)',
+    fontSize: 12,
+    textAlign: 'center',
+  },
+  searchResultsContainer: {
+    marginTop: 15,
+  },
+  searchResultsTitle: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '600',
+    marginBottom: 10,
+  },
+  searchResultCard: {
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    borderRadius: 10,
+    padding: 15,
+    marginBottom: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.1)',
+  },
+  searchResultInfo: {
+    flex: 1,
+  },
+  searchResultName: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
+    marginBottom: 2,
+  },
+  searchResultLabel: {
+    color: 'rgba(255, 255, 255, 0.7)',
+    fontSize: 14,
+  },
+  addMemberButton: {
+    backgroundColor: '#ff00ff',
+    paddingHorizontal: 15,
+    paddingVertical: 8,
+    borderRadius: 8,
+  },
+  addMemberButtonText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  createBandSection: {
+    alignItems: 'center',
+  },
+  createBandInfo: {
+    color: 'rgba(255, 255, 255, 0.8)',
+    fontSize: 16,
+    textAlign: 'center',
+    marginBottom: 20,
+    lineHeight: 22,
+  },
+  wizardActionButton: {
+    backgroundColor: '#ff00ff',
+    paddingVertical: 15,
+    paddingHorizontal: 30,
+    borderRadius: 10,
+    minWidth: 200,
+  },
+  wizardActionButtonDisabled: {
+    backgroundColor: '#666',
+    opacity: 0.6,
+  },
+  wizardActionButtonText: {
+    color: '#fff',
+    textAlign: 'center',
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  wizardNavigation: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingTop: 20,
+    paddingBottom: 30,
+  },
+  wizardNavButton: {
+    backgroundColor: 'rgba(255, 255, 255, 0.3)',
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderRadius: 10,
+    minWidth: 80,
+  },
+  wizardNextButton: {
+    backgroundColor: '#ff00ff',
+  },
+  wizardNavButtonDisabled: {
+    backgroundColor: '#666',
+    opacity: 0.6,
+  },
+  wizardNavButtonText: {
+    color: '#fff',
+    textAlign: 'center',
     fontSize: 14,
     fontWeight: 'bold',
   },

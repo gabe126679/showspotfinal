@@ -20,6 +20,7 @@ import VenuePublicProfile from './components/venuePublicProfile';
 import ShowBill from './components/ShowBill';
 import VenueAcceptanceWizard from './components/VenueAcceptanceWizard';
 import MessagesPage from './components/MessagesPage';
+import NotificationsPage from './components/NotificationsPage';
 import { UserProvider } from "./context/userContext";
 import { MusicPlayerProvider } from "./components/player";
 import BottomTabs from "./navigation/BottomTabs"; // contains Profile, MapHome, etc.
@@ -42,6 +43,7 @@ export type RootStackParamList = {
   ShowBill: { show_id: string };
   VenueAcceptanceWizard: { show_id: string };
   MessagesPage: undefined;
+  NotificationsPage: undefined;
   BottomTabs: undefined; // 👈 all main pages now live here
 };
 
@@ -75,6 +77,7 @@ export default function App() {
               <Stack.Screen name="ShowBill" component={ShowBill} />
               <Stack.Screen name="VenueAcceptanceWizard" component={VenueAcceptanceWizard} />
               <Stack.Screen name="MessagesPage" component={MessagesPage} />
+              <Stack.Screen name="NotificationsPage" component={NotificationsPage} />
               <Stack.Screen name="BottomTabs" component={BottomTabs} />
             </Stack.Navigator>
           </NavigationContainer>

@@ -1,120 +1,7 @@
--- Messaging System
--- Allows any entity (spotter, artist, venue) to message any other entity
+-- Fix messaging functions to use correct column names
+-- This updates the functions to use 'full_name' and 'id' instead of 'spotter_name' and 'spotter_id'
 
--- 1. Create messages table
-CREATE TABLE IF NOT EXISTS messages (
-  message_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  sender_id UUID NOT NULL,
-  sender_type TEXT NOT NULL CHECK (sender_type IN ('spotter', 'artist', 'venue')),
-  recipient_id UUID NOT NULL,
-  recipient_type TEXT NOT NULL CHECK (recipient_type IN ('spotter', 'artist', 'venue')),
-  message_content TEXT NOT NULL,
-  message_type TEXT DEFAULT 'text' CHECK (message_type IN ('text', 'system', 'notification')),
-  is_read BOOLEAN DEFAULT FALSE,
-  is_deleted_by_sender BOOLEAN DEFAULT FALSE,
-  is_deleted_by_recipient BOOLEAN DEFAULT FALSE,
-  parent_message_id UUID REFERENCES messages(message_id), -- For message threads/replies
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  read_at TIMESTAMP WITH TIME ZONE,
-  
-  -- Ensure sender and recipient are different
-  CONSTRAINT check_not_self_message CHECK (
-    NOT (sender_id = recipient_id AND sender_type = recipient_type)
-  )
-);
-
--- Create indexes for performance
-CREATE INDEX IF NOT EXISTS idx_messages_sender ON messages(sender_id, sender_type);
-CREATE INDEX IF NOT EXISTS idx_messages_recipient ON messages(recipient_id, recipient_type);
-CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages(created_at);
-CREATE INDEX IF NOT EXISTS idx_messages_is_read ON messages(is_read);
-CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(
-  LEAST(sender_id, recipient_id), 
-  GREATEST(sender_id, recipient_id),
-  LEAST(sender_type, recipient_type),
-  GREATEST(sender_type, recipient_type)
-);
-
--- 2. Create conversations view for easier querying
-CREATE OR REPLACE VIEW conversations AS
-WITH message_pairs AS (
-  SELECT 
-    LEAST(m.sender_id, m.recipient_id) as entity_1_id,
-    GREATEST(m.sender_id, m.recipient_id) as entity_2_id,
-    CASE 
-      WHEN m.sender_id < m.recipient_id THEN m.sender_type 
-      ELSE m.recipient_type 
-    END as entity_1_type,
-    CASE 
-      WHEN m.sender_id < m.recipient_id THEN m.recipient_type 
-      ELSE m.sender_type 
-    END as entity_2_type,
-    MAX(m.created_at) as last_message_at,
-    COUNT(*) FILTER (WHERE m.is_read = FALSE AND m.recipient_id = LEAST(m.sender_id, m.recipient_id)) as unread_count_1,
-    COUNT(*) FILTER (WHERE m.is_read = FALSE AND m.recipient_id = GREATEST(m.sender_id, m.recipient_id)) as unread_count_2
-  FROM messages m
-  WHERE m.is_deleted_by_sender = FALSE 
-    AND m.is_deleted_by_recipient = FALSE
-  GROUP BY 
-    LEAST(m.sender_id, m.recipient_id),
-    GREATEST(m.sender_id, m.recipient_id),
-    CASE WHEN m.sender_id < m.recipient_id THEN m.sender_type ELSE m.recipient_type END,
-    CASE WHEN m.sender_id < m.recipient_id THEN m.recipient_type ELSE m.sender_type END
-)
-SELECT * FROM message_pairs;
-
--- 3. Function to send a message
-CREATE OR REPLACE FUNCTION send_message(
-  sender_id_param UUID,
-  sender_type_param TEXT,
-  recipient_id_param UUID,
-  recipient_type_param TEXT,
-  message_content_param TEXT,
-  message_type_param TEXT DEFAULT 'text'
-)
-RETURNS UUID
-LANGUAGE plpgsql
-SECURITY DEFINER
-AS $$
-DECLARE
-  v_message_id UUID;
-BEGIN
-  -- Validate entity types
-  IF sender_type_param NOT IN ('spotter', 'artist', 'venue') THEN
-    RAISE EXCEPTION 'Invalid sender type: %', sender_type_param;
-  END IF;
-  
-  IF recipient_type_param NOT IN ('spotter', 'artist', 'venue') THEN
-    RAISE EXCEPTION 'Invalid recipient type: %', recipient_type_param;
-  END IF;
-  
-  -- Validate message content
-  IF message_content_param IS NULL OR TRIM(message_content_param) = '' THEN
-    RAISE EXCEPTION 'Message content cannot be empty';
-  END IF;
-  
-  -- Insert message
-  INSERT INTO messages (
-    sender_id,
-    sender_type,
-    recipient_id,
-    recipient_type,
-    message_content,
-    message_type
-  ) VALUES (
-    sender_id_param,
-    sender_type_param,
-    recipient_id_param,
-    recipient_type_param,
-    TRIM(message_content_param),
-    message_type_param
-  ) RETURNING message_id INTO v_message_id;
-  
-  RETURN v_message_id;
-END;
-$$;
-
--- 4. Function to get conversations for an entity
+-- 4. Function to get conversations for an entity (FIXED)
 CREATE OR REPLACE FUNCTION get_entity_conversations(
   entity_id UUID,
   entity_type TEXT,
@@ -243,7 +130,7 @@ BEGIN
 END;
 $$;
 
--- 5. Function to get messages in a conversation
+-- 5. Function to get messages in a conversation (FIXED)
 CREATE OR REPLACE FUNCTION get_conversation_messages(
   entity_1_id UUID,
   entity_1_type TEXT,
@@ -309,62 +196,7 @@ BEGIN
 END;
 $$;
 
--- 6. Function to mark messages as read
-CREATE OR REPLACE FUNCTION mark_messages_as_read(
-  reader_id UUID,
-  reader_type TEXT,
-  sender_id UUID,
-  sender_type TEXT
-)
-RETURNS INTEGER
-LANGUAGE plpgsql
-SECURITY DEFINER
-AS $$
-DECLARE
-  v_updated_count INTEGER;
-BEGIN
-  UPDATE messages
-  SET 
-    is_read = TRUE,
-    read_at = NOW()
-  WHERE 
-    recipient_id = reader_id AND
-    recipient_type = reader_type AND
-    messages.sender_id = sender_id AND
-    messages.sender_type = sender_type AND
-    is_read = FALSE;
-    
-  GET DIAGNOSTICS v_updated_count = ROW_COUNT;
-  
-  RETURN v_updated_count;
-END;
-$$;
-
--- 7. Function to get unread message count for an entity
-CREATE OR REPLACE FUNCTION get_unread_message_count(
-  entity_id UUID,
-  entity_type TEXT
-)
-RETURNS INTEGER
-LANGUAGE plpgsql
-SECURITY DEFINER
-AS $$
-DECLARE
-  v_count INTEGER;
-BEGIN
-  SELECT COUNT(*)::INTEGER INTO v_count
-  FROM messages
-  WHERE 
-    recipient_id = entity_id AND
-    recipient_type = entity_type AND
-    is_read = FALSE AND
-    is_deleted_by_recipient = FALSE;
-    
-  RETURN COALESCE(v_count, 0);
-END;
-$$;
-
--- 8. Function to search for entities to message
+-- 8. Function to search for entities to message (FIXED)
 CREATE OR REPLACE FUNCTION search_messageable_entities(
   search_query TEXT,
   searcher_id UUID,

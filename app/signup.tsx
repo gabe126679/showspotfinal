@@ -182,6 +182,7 @@ const styles = StyleSheet.create({
     fontFamily: 'Amiko-Regular',
   },
   loginLink: {
+    width: '100%',
     marginTop: 20,
     borderRadius: 12,
     paddingVertical: 15,

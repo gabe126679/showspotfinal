@@ -14,6 +14,7 @@ import {
 } from 'react-native';
 import { supabase } from '../lib/supabase';
 import { albumService, AlbumSongData } from '../services/albumService';
+import AlbumImageUploadModal from './AlbumImageUploadModal';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -53,6 +54,9 @@ const AlbumCreationModal: React.FC<AlbumCreationModalProps> = ({
   const [loading, setLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [filteredSongs, setFilteredSongs] = useState<Song[]>([]);
+  const [showImageUploadModal, setShowImageUploadModal] = useState(false);
+  const [createdAlbumId, setCreatedAlbumId] = useState<string | null>(null);
+  const [createdAlbumTitle, setCreatedAlbumTitle] = useState<string>('');
 
   // Filter songs based on search query
   useEffect(() => {
@@ -149,6 +153,13 @@ const AlbumCreationModal: React.FC<AlbumCreationModalProps> = ({
       return;
     }
 
+    // Validate artist_id exists
+    if (!artistData?.artist_id) {
+      Alert.alert('Error', 'Unable to create album. Artist information is missing.');
+      console.error('Missing artist_id in artistData:', artistData);
+      return;
+    }
+
     setLoading(true);
 
     try {
@@ -163,12 +174,20 @@ const AlbumCreationModal: React.FC<AlbumCreationModalProps> = ({
       const firstSong = songs.find(song => song.song_id === firstSongId);
       const firstSongData = firstSong ? await convertSongToAlbumData(firstSong) : undefined;
 
+      // Debug logging
+      console.log('Creating album with data:', {
+        albumType,
+        artistData,
+        artistId: albumType === 'artist' ? artistData.artist_id : artistData.artist_id,
+        bandId: albumType === 'band' ? artistData.band_id : undefined,
+      });
+
       // Create the album with the first song
       const result = await albumService.createAlbum({
         albumTitle: albumName.trim(),
         albumPrice: albumPrice,
         albumType: albumType,
-        artistId: albumType === 'artist' ? artistData.artist_id : artistData.band_id,
+        artistId: albumType === 'artist' ? artistData.artist_id : artistData.artist_id, // Always use artist_id
         bandId: albumType === 'band' ? artistData.band_id : undefined,
         firstSong: firstSongData,
       });
@@ -194,20 +213,26 @@ const AlbumCreationModal: React.FC<AlbumCreationModalProps> = ({
         ? `Album "${albumName}" created and sent for band approval!`
         : `Album "${albumName}" created with ${selectedSongs.size} song${selectedSongs.size !== 1 ? 's' : ''}!`;
 
+      // Store album info for image upload
+      setCreatedAlbumId(albumId);
+      setCreatedAlbumTitle(albumName);
+
       Alert.alert(
         'Success!',
         successMessage,
         [
           {
-            text: 'OK',
+            text: 'Add Album Image',
+            onPress: () => {
+              setShowImageUploadModal(true);
+            },
+          },
+          {
+            text: 'Skip Image',
             onPress: () => {
               onAlbumCreated();
               onClose();
-              // Reset form
-              setAlbumName('');
-              setAlbumPrice('0');
-              setSelectedSongs(new Set());
-              setSearchQuery('');
+              resetForm();
             },
           },
         ]
@@ -220,12 +245,34 @@ const AlbumCreationModal: React.FC<AlbumCreationModalProps> = ({
     }
   };
 
-  const handleClose = () => {
+  const resetForm = () => {
     setAlbumName('');
     setAlbumPrice('0');
     setSelectedSongs(new Set());
     setSearchQuery('');
+    setCreatedAlbumId(null);
+    setCreatedAlbumTitle('');
+  };
+
+  const handleClose = () => {
+    resetForm();
     onClose();
+  };
+
+  const handleImageUploaded = (imageUrl: string) => {
+    // Image uploaded successfully, now close everything
+    onAlbumCreated();
+    setShowImageUploadModal(false);
+    onClose();
+    resetForm();
+  };
+
+  const handleImageUploadClose = () => {
+    // User closed image upload modal, still complete the album creation
+    setShowImageUploadModal(false);
+    onAlbumCreated();
+    onClose();
+    resetForm();
   };
 
   return (
@@ -357,6 +404,17 @@ const AlbumCreationModal: React.FC<AlbumCreationModalProps> = ({
           </TouchableOpacity>
         </View>
       </View>
+      
+      {/* Album Image Upload Modal */}
+      {createdAlbumId && (
+        <AlbumImageUploadModal
+          visible={showImageUploadModal}
+          onClose={handleImageUploadClose}
+          albumId={createdAlbumId}
+          albumTitle={createdAlbumTitle}
+          onImageUploaded={handleImageUploaded}
+        />
+      )}
     </Modal>
   );
 };

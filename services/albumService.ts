@@ -1,4 +1,5 @@
 import { supabase } from '../lib/supabase';
+import { notificationService } from './notificationService';
 
 export interface AlbumSongData {
   song_id: string;
@@ -85,7 +86,7 @@ class AlbumService {
         if (bandData?.band_members) {
           albumConsensus = bandData.band_members.map((memberId: string) => ({
             member_id: memberId,
-            member_decision: false
+            member_decision: memberId === artistId // Set true for the uploader
           }));
         }
       }
@@ -111,6 +112,44 @@ class AlbumService {
 
       if (error) {
         throw new Error(`Database error: ${error.message}`);
+      }
+
+      // Send notifications for band albums
+      if (albumType === 'band' && bandId && data) {
+        try {
+          // Get current user info
+          const { data: { user } } = await supabase.auth.getUser();
+          if (user) {
+            const uploaderName = await notificationService.getUserFullName(user.id);
+            
+            // Get band name
+            const { data: bandData } = await supabase
+              .from('bands')
+              .select('band_name')
+              .eq('band_id', bandId)
+              .single();
+
+            const bandName = bandData?.band_name || 'Band';
+
+            // Send consensus notifications to all band members
+            const notificationResult = await notificationService.createBandAlbumConsensusNotification(
+              user.id,
+              uploaderName,
+              bandId,
+              bandName,
+              data.album_id,
+              albumTitle,
+              data
+            );
+
+            if (!notificationResult.success) {
+              console.warn('Failed to send some album consensus notifications:', notificationResult.error);
+            }
+          }
+        } catch (notificationError) {
+          console.error('Error sending album consensus notifications:', notificationError);
+          // Don't fail the album creation if notifications fail
+        }
       }
 
       return { success: true, data };
@@ -267,11 +306,7 @@ class AlbumService {
       // Get album data first
       const { data: album, error: albumError } = await supabase
         .from('albums')
-        .select(`
-          *,
-          artists:artist_id(artist_name),
-          bands:band_id(band_name)
-        `)
+        .select('*')
         .eq('album_id', albumId)
         .eq('album_status', 'active')
         .single();
@@ -292,6 +327,26 @@ class AlbumService {
         throw new Error('Album already purchased');
       }
 
+      // Get artist or band name
+      let artistName: string | undefined;
+      let bandName: string | undefined;
+
+      if (album.album_type === 'artist' && album.artist_id) {
+        const { data: artist } = await supabase
+          .from('artists')
+          .select('artist_name')
+          .eq('artist_id', album.artist_id)
+          .single();
+        artistName = artist?.artist_name;
+      } else if (album.album_type === 'band' && album.band_id) {
+        const { data: band } = await supabase
+          .from('bands')
+          .select('band_name')
+          .eq('band_id', album.band_id)
+          .single();
+        bandName = band?.band_name;
+      }
+
       // Create purchase record
       const purchaseData = {
         album_id: albumId,
@@ -303,17 +358,7 @@ class AlbumService {
       const { data: purchase, error: purchaseError } = await supabase
         .from('album_purchases')
         .insert([purchaseData])
-        .select(`
-          *,
-          albums:album_id(
-            album_title,
-            album_image,
-            album_type,
-            album_song_data,
-            artists:artist_id(artist_name),
-            bands:band_id(band_name)
-          )
-        `)
+        .select('*')
         .single();
 
       if (purchaseError) {
@@ -328,12 +373,12 @@ class AlbumService {
         purchase_price: purchase.purchase_price,
         purchase_date: purchase.purchase_date,
         purchase_type: purchase.purchase_type,
-        album_title: purchase.albums.album_title,
-        album_image: purchase.albums.album_image,
-        album_type: purchase.albums.album_type,
-        artist_name: purchase.albums.artists?.artist_name,
-        band_name: purchase.albums.bands?.band_name,
-        album_song_data: purchase.albums.album_song_data || []
+        album_title: album.album_title,
+        album_image: album.album_image,
+        album_type: album.album_type,
+        artist_name: artistName,
+        band_name: bandName,
+        album_song_data: album.album_song_data || []
       };
 
       return { success: true, data: formattedPurchase };
@@ -348,41 +393,91 @@ class AlbumService {
 
   async getUserPurchasedAlbums(userId: string): Promise<ServiceResponse<AlbumPurchase[]>> {
     try {
-      const { data, error } = await supabase
+      // First, get the album purchases
+      const { data: purchases, error: purchasesError } = await supabase
         .from('album_purchases')
-        .select(`
-          *,
-          albums:album_id(
-            album_title,
-            album_image,
-            album_type,
-            album_song_data,
-            artists:artist_id(artist_name),
-            bands:band_id(band_name)
-          )
-        `)
+        .select('*')
         .eq('purchaser_id', userId)
         .order('purchase_date', { ascending: false });
 
-      if (error) {
-        throw new Error(`Database error: ${error.message}`);
+      if (purchasesError) {
+        throw new Error(`Database error: ${purchasesError.message}`);
       }
 
-      // Format the response
-      const formattedPurchases: AlbumPurchase[] = (data || []).map(purchase => ({
-        purchase_id: purchase.purchase_id,
-        album_id: purchase.album_id,
-        purchaser_id: purchase.purchaser_id,
-        purchase_price: purchase.purchase_price,
-        purchase_date: purchase.purchase_date,
-        purchase_type: purchase.purchase_type,
-        album_title: purchase.albums.album_title,
-        album_image: purchase.albums.album_image,
-        album_type: purchase.albums.album_type,
-        artist_name: purchase.albums.artists?.artist_name,
-        band_name: purchase.albums.bands?.band_name,
-        album_song_data: purchase.albums.album_song_data || []
-      }));
+      if (!purchases || purchases.length === 0) {
+        return { success: true, data: [] };
+      }
+
+      // Get album details separately
+      const albumIds = purchases.map(p => p.album_id);
+      const { data: albums, error: albumsError } = await supabase
+        .from('albums')
+        .select('*')
+        .in('album_id', albumIds);
+
+      if (albumsError) {
+        throw new Error(`Database error: ${albumsError.message}`);
+      }
+
+      // Get artist and band names separately
+      const artistIds = albums?.filter(a => a.artist_id && a.album_type === 'artist').map(a => a.artist_id) || [];
+      const bandIds = albums?.filter(a => a.band_id && a.album_type === 'band').map(a => a.band_id) || [];
+
+      let artists: any[] = [];
+      let bands: any[] = [];
+
+      if (artistIds.length > 0) {
+        const { data: artistsData } = await supabase
+          .from('artists')
+          .select('artist_id, artist_name')
+          .in('artist_id', artistIds);
+        artists = artistsData || [];
+      }
+
+      if (bandIds.length > 0) {
+        const { data: bandsData } = await supabase
+          .from('bands')
+          .select('band_id, band_name')
+          .in('band_id', bandIds);
+        bands = bandsData || [];
+      }
+
+      // Format the response by combining the data
+      const formattedPurchases: AlbumPurchase[] = purchases.map(purchase => {
+        const album = albums?.find(a => a.album_id === purchase.album_id);
+        if (!album) {
+          return {
+            purchase_id: purchase.purchase_id,
+            album_id: purchase.album_id,
+            purchaser_id: purchase.purchaser_id,
+            purchase_price: purchase.purchase_price,
+            purchase_date: purchase.purchase_date,
+            purchase_type: purchase.purchase_type,
+            album_title: 'Unknown Album',
+            album_image: '',
+            album_type: 'artist',
+            album_song_data: []
+          };
+        }
+
+        const artist = album.album_type === 'artist' ? artists.find(a => a.artist_id === album.artist_id) : null;
+        const band = album.album_type === 'band' ? bands.find(b => b.band_id === album.band_id) : null;
+
+        return {
+          purchase_id: purchase.purchase_id,
+          album_id: purchase.album_id,
+          purchaser_id: purchase.purchaser_id,
+          purchase_price: purchase.purchase_price,
+          purchase_date: purchase.purchase_date,
+          purchase_type: purchase.purchase_type,
+          album_title: album.album_title,
+          album_image: album.album_image,
+          album_type: album.album_type,
+          artist_name: artist?.artist_name,
+          band_name: band?.band_name,
+          album_song_data: album.album_song_data || []
+        };
+      });
 
       return { success: true, data: formattedPurchases };
     } catch (error) {
@@ -438,6 +533,48 @@ class AlbumService {
         throw new Error(`Failed to update album: ${updateError.message}`);
       }
 
+      // Send notifications based on consensus change
+      if (updatedAlbum.album_type === 'band') {
+        try {
+          const { data: { user } } = await supabase.auth.getUser();
+          if (user) {
+            const memberName = await notificationService.getUserFullName(user.id);
+            
+            // Get album and band details for notifications
+            const { data: bandData } = await supabase
+              .from('bands')
+              .select('band_name')
+              .eq('band_id', updatedAlbum.band_id)
+              .single();
+
+            const bandName = bandData?.band_name || 'Band';
+
+            if (!decision) {
+              // Album was rejected - notify the original uploader
+              // Find who uploaded the album (first person to approve, or get from album creation audit)
+              // For now, we'll send a general rejection notification
+              const hasRejection = updatedConsensus.some((member: any) => member.member_decision === false);
+              if (hasRejection) {
+                // Note: In a full implementation, you'd want to track who originally created the album
+                // For now, this will be handled at the UI level when rejecting
+                console.log('Album rejected - rejection notifications handled at UI level');
+              }
+            } else if (allApproved) {
+              // All members approved - album is now active
+              await notificationService.createBandAlbumApprovedNotifications(
+                updatedAlbum.album_id,
+                updatedAlbum.album_title,
+                updatedAlbum.band_id,
+                bandName
+              );
+            }
+          }
+        } catch (notificationError) {
+          console.error('Error sending album consensus notifications:', notificationError);
+          // Don't fail the update if notifications fail
+        }
+      }
+
       return { success: true, data: updatedAlbum };
     } catch (error) {
       console.error('Error updating album consensus:', error);
@@ -450,13 +587,9 @@ class AlbumService {
 
   async getPublicAlbums(): Promise<ServiceResponse<Album[]>> {
     try {
-      const { data, error } = await supabase
+      const { data: albums, error } = await supabase
         .from('albums')
-        .select(`
-          *,
-          artists:artist_id(artist_name),
-          bands:band_id(band_name)
-        `)
+        .select('*')
         .eq('album_status', 'active')
         .order('created_at', { ascending: false });
 
@@ -464,7 +597,46 @@ class AlbumService {
         throw new Error(`Database error: ${error.message}`);
       }
 
-      return { success: true, data: data || [] };
+      if (!albums || albums.length === 0) {
+        return { success: true, data: [] };
+      }
+
+      // Get artist and band names separately
+      const artistIds = albums.filter(a => a.artist_id && a.album_type === 'artist').map(a => a.artist_id);
+      const bandIds = albums.filter(a => a.band_id && a.album_type === 'band').map(a => a.band_id);
+
+      let artists: any[] = [];
+      let bands: any[] = [];
+
+      if (artistIds.length > 0) {
+        const { data: artistsData } = await supabase
+          .from('artists')
+          .select('artist_id, artist_name')
+          .in('artist_id', artistIds);
+        artists = artistsData || [];
+      }
+
+      if (bandIds.length > 0) {
+        const { data: bandsData } = await supabase
+          .from('bands')
+          .select('band_id, band_name')
+          .in('band_id', bandIds);
+        bands = bandsData || [];
+      }
+
+      // Add names to albums
+      const albumsWithNames = albums.map(album => {
+        const artist = album.album_type === 'artist' ? artists.find(a => a.artist_id === album.artist_id) : null;
+        const band = album.album_type === 'band' ? bands.find(b => b.band_id === album.band_id) : null;
+        
+        return {
+          ...album,
+          artist_name: artist?.artist_name,
+          band_name: band?.band_name
+        };
+      });
+
+      return { success: true, data: albumsWithNames };
     } catch (error) {
       console.error('Error fetching public albums:', error);
       return { 

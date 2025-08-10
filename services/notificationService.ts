@@ -946,6 +946,465 @@ class NotificationService {
       return 'Unknown User';
     }
   }
+
+  // ===== ALBUM CONSENSUS NOTIFICATIONS =====
+
+  // Create band album consensus notification for all band members
+  async createBandAlbumConsensusNotification(
+    uploaderId: string,
+    uploaderName: string,
+    bandId: string,
+    bandName: string,
+    albumId: string,
+    albumTitle: string,
+    albumData: any
+  ): Promise<{ success: boolean; error?: string; notifications: any[] }> {
+    try {
+      // Get band members
+      const { data: bandData, error: bandError } = await supabase
+        .from('bands')
+        .select('band_members')
+        .eq('band_id', bandId)
+        .single();
+
+      if (bandError) {
+        throw new Error(`Failed to fetch band members: ${bandError.message}`);
+      }
+
+      // Get artist IDs from band_members and find their spotter_ids
+      const notifications: any[] = [];
+      const results: any[] = [];
+
+      for (const artistId of (bandData.band_members || [])) {
+        // Don't notify the uploader (uploaderId is the artist_id of the uploader)
+        if (artistId === uploaderId) {
+          continue; // Skip the uploader
+        }
+        
+        const { data: artistData } = await supabase
+          .from('artists')
+          .select('spotter_id, artist_name')
+          .eq('artist_id', artistId)
+          .single();
+
+        if (artistData) {
+          const result = await this.createBandAlbumInvitationNotification(
+            uploaderId,
+            uploaderName,
+            artistData.spotter_id,
+            artistData.artist_name,
+            bandName,
+            albumId,
+            albumTitle,
+            albumData,
+            artistId // Pass the artist_id for consensus updates
+          );
+          results.push({ artistId, artistName: artistData.artist_name, result });
+        }
+      }
+
+      const allSuccess = results.every(r => r.result.success);
+
+      return {
+        success: allSuccess,
+        error: allSuccess ? undefined : 'Some notifications failed to send',
+        notifications: results
+      };
+    } catch (error) {
+      console.error('Error creating band album consensus notifications:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error',
+        notifications: []
+      };
+    }
+  }
+
+  // Create individual band member album invitation notification
+  async createBandAlbumInvitationNotification(
+    uploaderId: string,
+    uploaderName: string,
+    recipientId: string,
+    recipientName: string,
+    bandName: string,
+    albumId: string,
+    albumTitle: string,
+    albumData: any,
+    recipientArtistId: string // Add artist_id parameter
+  ): Promise<{ success: boolean; error?: string; data?: any }> {
+    return this.createNotification({
+      notification_type: 'general',
+      notification_recipient: recipientId,
+      notification_sender: uploaderId,
+      notification_title: 'New Band Album for Approval',
+      notification_message: `${uploaderName} has created a new album "${albumTitle}" for your band ${bandName}. Please review and approve or reject this album.`,
+      notification_data: {
+        notification_subtype: 'band_album_consensus',
+        album_id: albumId,
+        album_title: albumTitle,
+        band_name: bandName,
+        band_id: albumData.band_id,
+        uploader_name: uploaderName,
+        album_type: 'band',
+        album_song_count: albumData.album_song_data?.length || 0,
+        album_price: albumData.album_price || '0',
+        recipient_artist_id: recipientArtistId // Add this for consensus updates
+      },
+      is_read: false,
+      action_required: true,
+    });
+  }
+
+  // Create notification when band album is approved (goes active)
+  async createBandAlbumApprovedNotifications(
+    albumId: string,
+    albumTitle: string,
+    bandId: string,
+    bandName: string
+  ): Promise<{ success: boolean; error?: string; notifications: any[] }> {
+    try {
+      // Get band members
+      const { data: bandData, error: bandError } = await supabase
+        .from('bands')
+        .select('band_members')
+        .eq('band_id', bandId)
+        .single();
+
+      if (bandError) {
+        throw new Error(`Failed to fetch band members: ${bandError.message}`);
+      }
+
+      const notifications: any[] = [];
+      const results: any[] = [];
+
+      // Notify all band members that the album is now active
+      for (const artistId of (bandData.band_members || [])) {
+        const { data: artistData } = await supabase
+          .from('artists')
+          .select('spotter_id, artist_name')
+          .eq('artist_id', artistId)
+          .single();
+
+        if (artistData) {
+          const result = await this.createNotification({
+            notification_type: 'general',
+            notification_recipient: artistData.spotter_id,
+            notification_sender: null,
+            notification_title: 'Album is Now Active!',
+            notification_message: `Great news! The album "${albumTitle}" by ${bandName} has been approved by all band members and is now live!`,
+            notification_data: {
+              album_id: albumId,
+              album_title: albumTitle,
+              band_name: bandName,
+              band_id: bandId,
+              notification_subtype: 'album_activated'
+            },
+            is_read: false,
+            action_required: false,
+          });
+          results.push({ artistId, artistName: artistData.artist_name, result });
+        }
+      }
+
+      const allSuccess = results.every(r => r.result.success);
+
+      return {
+        success: allSuccess,
+        error: allSuccess ? undefined : 'Some notifications failed to send',
+        notifications: results
+      };
+    } catch (error) {
+      console.error('Error creating band album approved notifications:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error',
+        notifications: []
+      };
+    }
+  }
+
+  // Create notification when band album is rejected
+  async createBandAlbumRejectedNotification(
+    rejectorId: string,
+    rejectorName: string,
+    uploaderId: string,
+    albumTitle: string,
+    bandName: string
+  ): Promise<{ success: boolean; error?: string; data?: any }> {
+    return this.createNotification({
+      notification_type: 'general',
+      notification_recipient: uploaderId,
+      notification_sender: rejectorId,
+      notification_title: 'Album Rejected',
+      notification_message: `${rejectorName} has rejected the album "${albumTitle}" for ${bandName}. You can edit the album and resubmit it for approval.`,
+      notification_data: {
+        album_title: albumTitle,
+        band_name: bandName,
+        rejector_name: rejectorName,
+        notification_subtype: 'album_rejected'
+      },
+      is_read: false,
+      action_required: false,
+    });
+  }
+
+  // Create album approval notification (for other band members)
+  async createAlbumApprovalNotification(
+    approverId: string,
+    approverName: string,
+    recipientId: string,
+    albumId: string,
+    albumTitle: string,
+    bandId: string,
+    bandName: string
+  ): Promise<{ success: boolean; error?: string; data?: any }> {
+    return this.createNotification({
+      notification_type: 'general',
+      notification_recipient: recipientId,
+      notification_sender: approverId,
+      notification_title: 'Album Approved by Band Member',
+      notification_message: `${approverName} approved the album "${albumTitle}" for ${bandName}.`,
+      notification_data: { 
+        album_id: albumId,
+        album_title: albumTitle,
+        band_id: bandId, 
+        band_name: bandName,
+        notification_subtype: 'album_member_approved'
+      },
+      is_read: false,
+      action_required: false,
+    });
+  }
+
+  // Create album rejection notification (for other band members)
+  async createAlbumRejectionNotification(
+    rejecterId: string,
+    rejecterName: string,
+    recipientId: string,
+    albumId: string,
+    albumTitle: string,
+    bandId: string,
+    bandName: string
+  ): Promise<{ success: boolean; error?: string; data?: any }> {
+    return this.createNotification({
+      notification_type: 'general',
+      notification_recipient: recipientId,
+      notification_sender: rejecterId,
+      notification_title: 'Album Rejected by Band Member',
+      notification_message: `${rejecterName} rejected the album "${albumTitle}" for ${bandName}.`,
+      notification_data: { 
+        album_id: albumId,
+        album_title: albumTitle,
+        band_id: bandId, 
+        band_name: bandName,
+        notification_subtype: 'album_member_rejected'
+      },
+      is_read: false,
+      action_required: false,
+    });
+  }
+
+  // ===== BACKLINE CONSENSUS NOTIFICATIONS =====
+
+  // Create band backline consensus notification for all band members
+  async createBandBacklineConsensusNotification(
+    requesterId: string,
+    requesterName: string,
+    bandId: string,
+    bandName: string,
+    showId: string,
+    showData: any
+  ): Promise<{ success: boolean; error?: string; notifications: any[] }> {
+    try {
+      // Get band members
+      const { data: bandData, error: bandError } = await supabase
+        .from('bands')
+        .select('band_members')
+        .eq('band_id', bandId)
+        .single();
+
+      if (bandError) {
+        throw new Error(`Failed to fetch band members: ${bandError.message}`);
+      }
+
+      // Get artist IDs from band_members and find their spotter_ids
+      const notifications: any[] = [];
+      const results: any[] = [];
+
+      for (const artistId of (bandData.band_members || [])) {
+        // Don't notify the requester
+        if (artistId === requesterId) {
+          continue; // Skip the requester
+        }
+        
+        const { data: artistData } = await supabase
+          .from('artists')
+          .select('spotter_id, artist_name')
+          .eq('artist_id', artistId)
+          .single();
+
+        if (artistData) {
+          const result = await this.createBandBacklineInvitationNotification(
+            requesterId,
+            requesterName,
+            artistData.spotter_id,
+            artistData.artist_name,
+            bandName,
+            showId,
+            showData,
+            artistId
+          );
+
+          results.push(result);
+          if (result.success) {
+            notifications.push(result.data);
+          }
+        }
+      }
+
+      return {
+        success: true,
+        notifications,
+        error: results.some(r => !r.success) ? 'Some notifications failed' : undefined
+      };
+    } catch (error) {
+      console.error('Error creating band backline consensus notifications:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error occurred',
+        notifications: []
+      };
+    }
+  }
+
+  // Create individual backline invitation notification
+  async createBandBacklineInvitationNotification(
+    requesterId: string,
+    requesterName: string,
+    recipientId: string,
+    recipientName: string,
+    bandName: string,
+    showId: string,
+    showData: any,
+    recipientArtistId: string
+  ): Promise<{ success: boolean; error?: string; data?: any }> {
+    return this.createNotification({
+      notification_type: 'general',
+      notification_recipient: recipientId,
+      notification_sender: requesterId,
+      notification_title: 'Backline Request for Band',
+      notification_message: `${requesterName} wants ${bandName} to backline for a show. Do you approve?`,
+      notification_data: { 
+        show_id: showId,
+        band_id: showData.band_id,
+        band_name: bandName,
+        venue_name: showData.venue_name || 'Venue',
+        show_date: showData.show_date || showData.show_preferred_date,
+        show_time: showData.show_time || showData.show_preferred_time,
+        recipient_artist_id: recipientArtistId,
+        notification_subtype: 'band_backline_consensus'
+      },
+      is_read: false,
+      action_required: true,
+    });
+  }
+
+  // Create backline approved notification
+  async createBandBacklineApprovedNotifications(
+    showId: string,
+    bandId: string,
+    bandName: string,
+    showData: any
+  ): Promise<{ success: boolean; error?: string; notifications: any[] }> {
+    try {
+      // Get all band members
+      const { data: bandData, error: bandError } = await supabase
+        .from('bands')
+        .select('band_members')
+        .eq('band_id', bandId)
+        .single();
+
+      if (bandError) {
+        throw new Error(`Failed to fetch band members: ${bandError.message}`);
+      }
+
+      const notifications: any[] = [];
+      const results: any[] = [];
+
+      for (const artistId of (bandData.band_members || [])) {
+        const { data: artistData } = await supabase
+          .from('artists')
+          .select('spotter_id, artist_name')
+          .eq('artist_id', artistId)
+          .single();
+
+        if (artistData) {
+          const result = await this.createNotification({
+            notification_type: 'general',
+            notification_recipient: artistData.spotter_id,
+            notification_sender: null,
+            notification_title: 'Band Approved for Backline',
+            notification_message: `${bandName} has been approved to backline for the show!`,
+            notification_data: { 
+              show_id: showId,
+              band_id: bandId,
+              band_name: bandName,
+              venue_name: showData.venue_name || 'Venue',
+              show_date: showData.show_date || showData.show_preferred_date,
+              show_time: showData.show_time || showData.show_preferred_time,
+              notification_subtype: 'band_backline_approved'
+            },
+            is_read: false,
+            action_required: false,
+          });
+
+          results.push(result);
+          if (result.success) {
+            notifications.push(result.data);
+          }
+        }
+      }
+
+      return {
+        success: true,
+        notifications,
+        error: results.some(r => !r.success) ? 'Some notifications failed' : undefined
+      };
+    } catch (error) {
+      console.error('Error creating band backline approved notifications:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error occurred',
+        notifications: []
+      };
+    }
+  }
+
+  // Create backline rejected notification  
+  async createBandBacklineMemberRejectedNotification(
+    rejecterId: string,
+    rejecterName: string,
+    recipientId: string,
+    bandId: string,
+    bandName: string,
+    showId: string
+  ): Promise<{ success: boolean; error?: string; data?: any }> {
+    return this.createNotification({
+      notification_type: 'general',
+      notification_recipient: recipientId,
+      notification_sender: rejecterId,
+      notification_title: 'Backline Rejected by Band Member',
+      notification_message: `${rejecterName} rejected the backline request for ${bandName}.`,
+      notification_data: { 
+        show_id: showId,
+        band_id: bandId,
+        band_name: bandName,
+        notification_subtype: 'backline_member_rejected'
+      },
+      is_read: false,
+      action_required: false,
+    });
+  }
 }
 
 export const notificationService = new NotificationService();

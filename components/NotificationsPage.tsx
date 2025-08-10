@@ -15,6 +15,8 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useNavigation } from '@react-navigation/native';
 import { supabase } from '../lib/supabase';
 import { notificationService } from '../services/notificationService';
+import { albumService } from '../services/albumService';
+import { backlinesService } from '../services/backlinesService';
 import { useMusicPlayer } from './player';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
@@ -34,7 +36,7 @@ interface Notification {
 }
 
 interface NotificationsPageProps {
-  onClose: () => void;
+  onClose?: () => void;
 }
 
 const NotificationsPage: React.FC<NotificationsPageProps> = ({ onClose }) => {
@@ -1023,6 +1025,317 @@ const NotificationsPage: React.FC<NotificationsPageProps> = ({ onClose }) => {
     }
   };
 
+  // Delete notification function
+  const deleteNotification = async (notificationId: string) => {
+    try {
+      Alert.alert(
+        'Delete Notification',
+        'Are you sure you want to delete this notification?',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Delete',
+            style: 'destructive',
+            onPress: async () => {
+              const { error } = await supabase
+                .from('notifications')
+                .delete()
+                .eq('notification_id', notificationId);
+
+              if (error) {
+                console.error('Error deleting notification:', error);
+                Alert.alert('Error', 'Could not delete notification');
+                return;
+              }
+
+              // Update local state to remove the notification
+              setNotifications(prev => 
+                prev.filter(notification => notification.notification_id !== notificationId)
+              );
+            }
+          }
+        ]
+      );
+    } catch (error) {
+      console.error('Error in deleteNotification:', error);
+      Alert.alert('Error', 'Could not delete notification');
+    }
+  };
+
+  // Handle band album consensus approve
+  const handleAlbumConsensusApprove = async (notification: Notification) => {
+    try {
+      if (!notification.notification_data?.album_id) {
+        Alert.alert('Error', 'Invalid album consensus notification');
+        return;
+      }
+
+      setLoading(true);
+
+      // Update album consensus via albumService
+      // Use the artist_id from notification data, not the recipient (which is spotter_id)
+      const artistId = notification.notification_data.recipient_artist_id || notification.notification_recipient;
+      const result = await albumService.updateAlbumConsensus(
+        notification.notification_data.album_id,
+        artistId,
+        true // approved
+      );
+
+      if (!result.success) {
+        Alert.alert('Error', result.error || 'Failed to approve album');
+        return;
+      }
+
+      // Mark notification as handled
+      await supabase
+        .from('notifications')
+        .update({ action_required: false, is_read: true })
+        .eq('notification_id', notification.notification_id);
+
+      // Send approval notifications to other band members
+      if (notification.notification_data?.band_id) {
+        // Get band members
+        const { data: bandData } = await supabase
+          .from('bands')
+          .select('band_members')
+          .eq('band_id', notification.notification_data.band_id)
+          .single();
+
+        if (bandData?.band_members) {
+          // Get approving artist's info
+          const { data: artistData } = await supabase
+            .from('artists')
+            .select('artist_name')
+            .eq('artist_id', artistId)
+            .single();
+
+          const approverName = artistData?.artist_name || 'A member';
+
+          // Send notifications to all band members except the approver
+          for (const memberArtistId of bandData.band_members) {
+            if (memberArtistId !== artistId) {
+              await notificationService.createAlbumApprovalNotification(
+                artistId,
+                approverName,
+                memberArtistId,
+                notification.notification_data.album_id,
+                notification.notification_data.album_title,
+                notification.notification_data.band_id,
+                notification.notification_data.band_name
+              );
+            }
+          }
+        }
+      }
+
+      // Check if album is now active (all members approved)
+      if (result.data?.album_status === 'active') {
+        Alert.alert('Success', `Album "${notification.notification_data.album_title}" is now active and available for purchase!`);
+      } else {
+        Alert.alert('Success', 'Your approval has been recorded. Waiting for other band members to approve.');
+      }
+
+      fetchNotifications(); // Refresh the list
+    } catch (error) {
+      console.error('Error approving album consensus:', error);
+      Alert.alert('Error', 'Could not approve album');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Handle band album consensus reject
+  const handleAlbumConsensusReject = async (notification: Notification) => {
+    try {
+      if (!notification.notification_data?.album_id) {
+        Alert.alert('Error', 'Invalid album consensus notification');
+        return;
+      }
+
+      Alert.alert(
+        'Reject Album',
+        'Are you sure you want to reject this album?',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Reject',
+            style: 'destructive',
+            onPress: async () => {
+              setLoading(true);
+
+              // Update album consensus via albumService
+              // Use the artist_id from notification data, not the recipient (which is spotter_id)
+              const artistId = notification.notification_data.recipient_artist_id || notification.notification_recipient;
+              const result = await albumService.updateAlbumConsensus(
+                notification.notification_data.album_id,
+                artistId,
+                false // rejected
+              );
+
+              if (!result.success) {
+                Alert.alert('Error', result.error || 'Failed to reject album');
+                setLoading(false);
+                return;
+              }
+
+              // Mark notification as handled
+              await supabase
+                .from('notifications')
+                .update({ action_required: false, is_read: true })
+                .eq('notification_id', notification.notification_id);
+
+              // Get rejecting artist's info
+              const { data: artistData } = await supabase
+                .from('artists')
+                .select('artist_name')
+                .eq('artist_id', artistId)
+                .single();
+
+              const rejecterName = artistData?.artist_name || 'A member';
+
+              // Send rejection notification to album uploader (if available in notification_data)
+              if (notification.notification_sender) {
+                await notificationService.createBandAlbumRejectedNotification(
+                  artistId,
+                  rejecterName,
+                  notification.notification_sender,
+                  notification.notification_data.album_title,
+                  notification.notification_data.band_name
+                );
+              }
+
+              // Also send rejection notification to other band members
+              if (notification.notification_data?.band_id) {
+                // Get band members
+                const { data: bandData } = await supabase
+                  .from('bands')
+                  .select('band_members')
+                  .eq('band_id', notification.notification_data.band_id)
+                  .single();
+
+                if (bandData?.band_members) {
+                  // Send notifications to all band members except the rejecter
+                  for (const memberArtistId of bandData.band_members) {
+                    if (memberArtistId !== artistId && memberArtistId !== notification.notification_sender) {
+                      await notificationService.createAlbumRejectionNotification(
+                        artistId,
+                        rejecterName,
+                        memberArtistId,
+                        notification.notification_data.album_id,
+                        notification.notification_data.album_title,
+                        notification.notification_data.band_id,
+                        notification.notification_data.band_name
+                      );
+                    }
+                  }
+                }
+              }
+
+              Alert.alert('Success', 'You have rejected the album');
+              fetchNotifications();
+              setLoading(false);
+            },
+          },
+        ]
+      );
+    } catch (error) {
+      console.error('Error rejecting album consensus:', error);
+      Alert.alert('Error', 'Could not reject album');
+      setLoading(false);
+    }
+  };
+
+  // Handle backline consensus approval
+  const handleBacklineConsensusApprove = async (notification: Notification) => {
+    try {
+      if (!notification.notification_data?.show_id || !notification.notification_data?.band_id) {
+        Alert.alert('Error', 'Invalid backline consensus notification');
+        return;
+      }
+
+      setLoading(true);
+
+      // Update backline consensus via backlinesService
+      const artistId = notification.notification_data.recipient_artist_id || notification.notification_recipient;
+      const result = await backlinesService.updateBacklineConsensus(
+        notification.notification_data.show_id,
+        notification.notification_data.band_id,
+        artistId,
+        true // approved
+      );
+
+      if (!result.success) {
+        Alert.alert('Error', result.error || 'Failed to approve backline');
+        return;
+      }
+
+      // Mark notification as handled
+      await supabase
+        .from('notifications')
+        .update({ action_required: false, is_read: true })
+        .eq('notification_id', notification.notification_id);
+
+      Alert.alert('Success', 'You have approved the backline request!');
+      
+      // Refresh notifications
+      await fetchNotifications();
+    } catch (error) {
+      console.error('Error approving backline consensus:', error);
+      Alert.alert('Error', 'Could not approve backline');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Handle backline consensus rejection
+  const handleBacklineConsensusReject = async (notification: Notification) => {
+    try {
+      if (!notification.notification_data?.show_id || !notification.notification_data?.band_id) {
+        Alert.alert('Error', 'Invalid backline consensus notification');
+        return;
+      }
+
+      setLoading(true);
+
+      // Update backline consensus via backlinesService
+      const artistId = notification.notification_data.recipient_artist_id || notification.notification_recipient;
+      const result = await backlinesService.updateBacklineConsensus(
+        notification.notification_data.show_id,
+        notification.notification_data.band_id,
+        artistId,
+        false // rejected
+      );
+
+      if (!result.success) {
+        Alert.alert('Error', result.error || 'Failed to reject backline');
+        return;
+      }
+
+      // Mark notification as handled
+      await supabase
+        .from('notifications')
+        .update({ action_required: false, is_read: true })
+        .eq('notification_id', notification.notification_id);
+
+      Alert.alert('Declined', 'You have declined the backline request.');
+      
+      // Refresh notifications
+      await fetchNotifications();
+    } catch (error) {
+      console.error('Error rejecting backline consensus:', error);
+      Alert.alert('Error', 'Could not reject backline');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Handle view show bill
+  const handleViewShow = (notification: Notification) => {
+    if (notification.notification_data?.show_id) {
+      navigation.navigate('ShowBill', { show_id: notification.notification_data.show_id });
+    }
+  };
+
   const unreadCount = notifications.filter(n => !n.is_read).length;
 
   return (
@@ -1033,7 +1346,7 @@ const NotificationsPage: React.FC<NotificationsPageProps> = ({ onClose }) => {
         start={{ x: 0, y: 0 }}
         end={{ x: 1, y: 0 }}
       >
-        <TouchableOpacity style={styles.backButton} onPress={onClose}>
+        <TouchableOpacity style={styles.backButton} onPress={onClose || (() => navigation.goBack())}>
           <Text style={styles.backButtonText}>←</Text>
         </TouchableOpacity>
         
@@ -1105,9 +1418,20 @@ const NotificationsPage: React.FC<NotificationsPageProps> = ({ onClose }) => {
                     <Text style={styles.notificationTitle}>
                       {notification.notification_title}
                     </Text>
-                    <Text style={styles.notificationTime}>
-                      {formatDate(notification.created_at)}
-                    </Text>
+                    <View style={styles.headerRight}>
+                      <Text style={styles.notificationTime}>
+                        {formatDate(notification.created_at)}
+                      </Text>
+                      <TouchableOpacity
+                        style={styles.deleteButton}
+                        onPress={(e) => {
+                          e.stopPropagation(); // Prevent notification tap
+                          deleteNotification(notification.notification_id);
+                        }}
+                      >
+                        <Text style={styles.deleteButtonText}>×</Text>
+                      </TouchableOpacity>
+                    </View>
                   </View>
                   
                   <Text style={styles.notificationMessage}>
@@ -1240,6 +1564,54 @@ const NotificationsPage: React.FC<NotificationsPageProps> = ({ onClose }) => {
                         onPress={() => handleVenueShowInvitationReject(notification)}
                       >
                         <Text style={styles.rejectButtonText}>Decline</Text>
+                      </TouchableOpacity>
+                    </View>
+                  )}
+
+                  {/* Band Album Consensus */}
+                  {(notification.notification_type === 'band_album_consensus' || 
+                    (notification.notification_type === 'general' && notification.notification_data?.notification_subtype === 'band_album_consensus')) 
+                    && notification.action_required && (
+                    <View style={styles.actionButtons}>
+                      <TouchableOpacity
+                        style={styles.acceptButton}
+                        onPress={() => handleAlbumConsensusApprove(notification)}
+                      >
+                        <Text style={styles.acceptButtonText}>Approve Album</Text>
+                      </TouchableOpacity>
+                      
+                      <TouchableOpacity
+                        style={styles.rejectButton}
+                        onPress={() => handleAlbumConsensusReject(notification)}
+                      >
+                        <Text style={styles.rejectButtonText}>Reject</Text>
+                      </TouchableOpacity>
+                    </View>
+                  )}
+
+                  {/* Band Backline Consensus */}
+                  {(notification.notification_type === 'general' && notification.notification_data?.notification_subtype === 'band_backline_consensus') 
+                    && notification.action_required && (
+                    <View style={styles.actionButtons}>
+                      <TouchableOpacity
+                        style={styles.acceptButton}
+                        onPress={() => handleBacklineConsensusApprove(notification)}
+                      >
+                        <Text style={styles.acceptButtonText}>Accept Backline</Text>
+                      </TouchableOpacity>
+                      
+                      <TouchableOpacity
+                        style={styles.rejectButton}
+                        onPress={() => handleBacklineConsensusReject(notification)}
+                      >
+                        <Text style={styles.rejectButtonText}>Decline</Text>
+                      </TouchableOpacity>
+
+                      <TouchableOpacity
+                        style={styles.viewShowButton}
+                        onPress={() => handleViewShow(notification)}
+                      >
+                        <Text style={styles.viewShowButtonText}>View Show Bill</Text>
                       </TouchableOpacity>
                     </View>
                   )}
@@ -1469,6 +1841,37 @@ const styles = StyleSheet.create({
   },
   showBillLinkText: {
     color: '#ff00ff',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  headerRight: {
+    alignItems: 'flex-end',
+  },
+  deleteButton: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: 'rgba(255, 0, 0, 0.1)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginTop: 4,
+  },
+  deleteButtonText: {
+    color: '#ff4444',
+    fontSize: 18,
+    fontWeight: 'bold',
+    lineHeight: 20,
+  },
+  viewShowButton: {
+    backgroundColor: '#ff00ff',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 6,
+    alignItems: 'center',
+    marginTop: 8,
+  },
+  viewShowButtonText: {
+    color: '#fff',
     fontSize: 12,
     fontWeight: '600',
   },

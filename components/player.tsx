@@ -346,6 +346,11 @@ const Player = () => {
   const [showPlaylistModal, setShowPlaylistModal] = useState(false);
   const [artistName, setArtistName] = useState('Unknown Artist');
   const progressAnimation = useRef(new Animated.Value(0)).current;
+  
+  // Animation values for button presses
+  const playButtonScale = useRef(new Animated.Value(1)).current;
+  const shuffleButtonScale = useRef(new Animated.Value(1)).current;
+  const repeatButtonScale = useRef(new Animated.Value(1)).current;
 
   // Get artist name from database
   useEffect(() => {
@@ -406,6 +411,44 @@ const Player = () => {
   const openPlaylistModal = () => {
     if (currentSong) {
       setShowPlaylistModal(true);
+    }
+  };
+
+  // Animation handlers
+  const animateButtonPress = (scale: Animated.Value) => {
+    Animated.sequence([
+      Animated.timing(scale, {
+        toValue: 0.9,
+        duration: 100,
+        useNativeDriver: true,
+      }),
+      Animated.spring(scale, {
+        toValue: 1,
+        friction: 4,
+        tension: 100,
+        useNativeDriver: true,
+      }),
+    ]).start();
+  };
+
+  const handlePlayPress = () => {
+    if (currentSong) {
+      animateButtonPress(playButtonScale);
+      pauseSong();
+    }
+  };
+
+  const handleShufflePress = () => {
+    if (currentSong) {
+      animateButtonPress(shuffleButtonScale);
+      toggleShuffle();
+    }
+  };
+
+  const handleRepeatPress = () => {
+    if (currentSong) {
+      animateButtonPress(repeatButtonScale);
+      toggleRepeat();
     }
   };
 
@@ -511,56 +554,80 @@ const Player = () => {
               isShuffleOn && styles.controlButtonActive,
               !currentSong && styles.controlButtonDisabled
             ]}
-            onPress={currentSong ? toggleShuffle : undefined}
+            onPress={handleShufflePress}
             disabled={!currentSong}
+            activeOpacity={0.8}
           >
-            <Text style={[
-              styles.controlButtonText, 
-              isShuffleOn && styles.controlButtonTextActive,
-              !currentSong && styles.controlButtonTextDisabled
+            <Animated.View style={[
+              styles.shuffleIcon, 
+              isShuffleOn && styles.iconActive,
+              { transform: [{ scale: shuffleButtonScale }] }
             ]}>
-              🔀
-            </Text>
+              <View style={[styles.shuffleLine1, isShuffleOn && styles.lineActive]} />
+              <View style={[styles.shuffleLine2, isShuffleOn && styles.lineActive]} />
+              <View style={[styles.shuffleArrow1, isShuffleOn && styles.arrowActive]} />
+              <View style={[styles.shuffleArrow2, isShuffleOn && styles.arrowActive]} />
+            </Animated.View>
           </TouchableOpacity>
 
           <TouchableOpacity 
-            style={[styles.controlButton, !currentSong && styles.controlButtonDisabled]} 
+            style={[styles.skipButton, !currentSong && styles.controlButtonDisabled]} 
             onPress={currentSong ? previousSong : undefined}
             disabled={!currentSong}
           >
-            <Text style={[styles.controlButtonText, !currentSong && styles.controlButtonTextDisabled]}>⏮</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity 
-            style={[styles.playButton, !currentSong && styles.playButtonDisabled]} 
-            onPress={currentSong ? pauseSong : undefined}
-            disabled={!currentSong}
-          >
-            <View style={styles.playButtonShadow}>
-              <LinearGradient
-                colors={currentSong ? ["#ff00ff", "#2a2882"] : ["#ccc", "#999"]}
-                style={styles.playButtonGradient}
-              >
-                <View style={styles.playButtonIcon}>
-                  {currentSong && isPlaying ? (
-                    <View style={styles.pauseIcon}>
-                      <View style={styles.pauseBar} />
-                      <View style={styles.pauseBar} />
-                    </View>
-                  ) : (
-                    <View style={styles.playIcon} />
-                  )}
-                </View>
-              </LinearGradient>
+            <View style={styles.previousIcon}>
+              <View style={[styles.skipBar, !currentSong && styles.skipBarDisabled]} />
+              <View style={[styles.skipTriangle, styles.skipTriangleLeft, !currentSong && styles.skipTriangleDisabled]} />
+              <View style={[styles.skipTriangle, styles.skipTriangleLeft2, !currentSong && styles.skipTriangleDisabled]} />
             </View>
           </TouchableOpacity>
 
           <TouchableOpacity 
-            style={[styles.controlButton, !currentSong && styles.controlButtonDisabled]} 
+            style={[styles.playButton, !currentSong && styles.playButtonDisabled]} 
+            onPress={handlePlayPress}
+            disabled={!currentSong}
+            activeOpacity={0.8}
+          >
+            <Animated.View style={[
+              styles.playButtonOuter, 
+              !currentSong && styles.playButtonOuterDisabled,
+              { transform: [{ scale: playButtonScale }] }
+            ]}>
+              <LinearGradient
+                colors={currentSong ? ["#ff00ff", "#ff00ff"] : ["#ccc", "#999"]}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+                style={styles.playButtonGradient}
+              >
+                <View style={styles.playButtonInner}>
+                  <LinearGradient
+                    colors={currentSong ? ["#ffffff20", "#ffffff05"] : ["#ffffff10", "#ffffff05"]}
+                    style={styles.playButtonInnerGradient}
+                  >
+                    {currentSong && isPlaying ? (
+                      <View style={styles.pauseIcon}>
+                        <View style={styles.pauseBar} />
+                        <View style={styles.pauseBar} />
+                      </View>
+                    ) : (
+                      <View style={styles.playTriangle} />
+                    )}
+                  </LinearGradient>
+                </View>
+              </LinearGradient>
+            </Animated.View>
+          </TouchableOpacity>
+
+          <TouchableOpacity 
+            style={[styles.skipButton, !currentSong && styles.controlButtonDisabled]} 
             onPress={currentSong ? nextSong : undefined}
             disabled={!currentSong}
           >
-            <Text style={[styles.controlButtonText, !currentSong && styles.controlButtonTextDisabled]}>⏭</Text>
+            <View style={styles.nextIcon}>
+              <View style={[styles.skipTriangle, styles.skipTriangleRight, !currentSong && styles.skipTriangleDisabled]} />
+              <View style={[styles.skipTriangle, styles.skipTriangleRight2, !currentSong && styles.skipTriangleDisabled]} />
+              <View style={[styles.skipBar, !currentSong && styles.skipBarDisabled]} />
+            </View>
           </TouchableOpacity>
 
           <TouchableOpacity
@@ -569,16 +636,20 @@ const Player = () => {
               isRepeatOn && styles.controlButtonActive,
               !currentSong && styles.controlButtonDisabled
             ]}
-            onPress={currentSong ? toggleRepeat : undefined}
+            onPress={handleRepeatPress}
             disabled={!currentSong}
+            activeOpacity={0.8}
           >
-            <Text style={[
-              styles.controlButtonText, 
-              isRepeatOn && styles.controlButtonTextActive,
-              !currentSong && styles.controlButtonTextDisabled
+            <Animated.View style={[
+              styles.repeatIcon, 
+              isRepeatOn && styles.iconActive,
+              { transform: [{ scale: repeatButtonScale }] }
             ]}>
-              🔁
-            </Text>
+              <View style={[styles.repeatCircle, isRepeatOn && styles.repeatCircleActive]} />
+              <View style={[styles.repeatArrow, isRepeatOn && styles.repeatArrowActive]} />
+              <View style={[styles.repeatArrowHead1, isRepeatOn && styles.repeatArrowHeadActive]} />
+              <View style={[styles.repeatArrowHead2, isRepeatOn && styles.repeatArrowHeadActive]} />
+            </Animated.View>
           </TouchableOpacity>
         </View>
       </View>
@@ -785,32 +856,36 @@ const styles = StyleSheet.create({
     alignSelf: "center",
   },
   controlButton: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: "rgba(255, 255, 255, 0.1)",
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: "rgba(255, 255, 255, 0.05)",
     justifyContent: "center",
     alignItems: "center",
+    borderWidth: 1,
+    borderColor: "rgba(255, 255, 255, 0.1)",
   },
   controlButtonActive: {
-    backgroundColor: "rgba(255, 0, 255, 0.2)",
+    backgroundColor: "rgba(255, 0, 255, 0.15)",
+    borderColor: "rgba(255, 0, 255, 0.3)",
     shadowColor: "#ff00ff",
     shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.5,
-    shadowRadius: 10,
+    shadowOpacity: 0.4,
+    shadowRadius: 12,
+    elevation: 8,
   },
   controlButtonDisabled: {
     opacity: 0.3,
   },
-  controlButtonText: {
-    fontSize: 20,
-    color: "#ffffff",
-  },
-  controlButtonTextActive: {
-    color: "#ff00ff",
-  },
-  controlButtonTextDisabled: {
-    color: "#555",
+  skipButton: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: "rgba(255, 255, 255, 0.08)",
+    justifyContent: "center",
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: "rgba(255, 255, 255, 0.15)",
   },
   playButton: {
     // No margin needed - handled by space-between
@@ -818,44 +893,241 @@ const styles = StyleSheet.create({
   playButtonDisabled: {
     opacity: 0.5,
   },
-  playButtonShadow: {
+  playButtonOuter: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
     shadowColor: "#ff00ff",
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.4,
-    shadowRadius: 15,
-    elevation: 15,
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.5,
+    shadowRadius: 20,
+    elevation: 20,
+  },
+  playButtonOuterDisabled: {
+    shadowOpacity: 0,
   },
   playButtonGradient: {
-    width: 70,
-    height: 70,
-    borderRadius: 35,
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    padding: 2,
+  },
+  playButtonInner: {
+    flex: 1,
+    borderRadius: 38,
+    overflow: 'hidden',
+  },
+  playButtonInnerGradient: {
+    flex: 1,
     justifyContent: "center",
     alignItems: "center",
+    backgroundColor: '#2a2882',
   },
-  playButtonIcon: {
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  playIcon: {
+  playTriangle: {
     width: 0,
     height: 0,
-    borderLeftWidth: 16,
+    borderLeftWidth: 20,
     borderLeftColor: "#ffffff",
-    borderTopWidth: 10,
+    borderTopWidth: 12,
     borderTopColor: "transparent",
-    borderBottomWidth: 10,
+    borderBottomWidth: 12,
     borderBottomColor: "transparent",
-    marginLeft: 3,
+    marginLeft: 4,
   },
   pauseIcon: {
     flexDirection: "row",
-    gap: 6,
+    gap: 8,
   },
   pauseBar: {
-    width: 5,
-    height: 20,
+    width: 6,
+    height: 24,
     backgroundColor: "#ffffff",
-    borderRadius: 2.5,
+    borderRadius: 3,
+  },
+  // Shuffle Icon
+  shuffleIcon: {
+    width: 24,
+    height: 24,
+    position: 'relative',
+  },
+  shuffleLine1: {
+    position: 'absolute',
+    width: 20,
+    height: 2,
+    backgroundColor: '#ffffff',
+    top: 8,
+    left: 2,
+  },
+  shuffleLine2: {
+    position: 'absolute',
+    width: 20,
+    height: 2,
+    backgroundColor: '#ffffff',
+    bottom: 8,
+    left: 2,
+  },
+  shuffleArrow1: {
+    position: 'absolute',
+    width: 0,
+    height: 0,
+    borderLeftWidth: 5,
+    borderLeftColor: '#ffffff',
+    borderTopWidth: 3,
+    borderTopColor: 'transparent',
+    borderBottomWidth: 3,
+    borderBottomColor: 'transparent',
+    top: 5,
+    right: 2,
+  },
+  shuffleArrow2: {
+    position: 'absolute',
+    width: 0,
+    height: 0,
+    borderRightWidth: 5,
+    borderRightColor: '#ffffff',
+    borderTopWidth: 3,
+    borderTopColor: 'transparent',
+    borderBottomWidth: 3,
+    borderBottomColor: 'transparent',
+    bottom: 5,
+    left: 2,
+  },
+  iconActive: {
+    transform: [{ scale: 1.1 }],
+  },
+  lineActive: {
+    backgroundColor: '#ff00ff',
+  },
+  arrowActive: {
+    borderLeftColor: '#ff00ff',
+    borderRightColor: '#ff00ff',
+  },
+  // Skip Icons
+  previousIcon: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginRight: 2,
+  },
+  nextIcon: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginLeft: 2,
+  },
+  skipBar: {
+    width: 3,
+    height: 20,
+    backgroundColor: '#ffffff',
+    borderRadius: 1.5,
+  },
+  skipBarDisabled: {
+    backgroundColor: '#555',
+  },
+  skipTriangle: {
+    width: 0,
+    height: 0,
+  },
+  skipTriangleLeft: {
+    borderRightWidth: 12,
+    borderRightColor: '#ffffff',
+    borderTopWidth: 10,
+    borderTopColor: 'transparent',
+    borderBottomWidth: 10,
+    borderBottomColor: 'transparent',
+    marginRight: -2,
+  },
+  skipTriangleLeft2: {
+    borderRightWidth: 12,
+    borderRightColor: '#ffffff',
+    borderTopWidth: 10,
+    borderTopColor: 'transparent',
+    borderBottomWidth: 10,
+    borderBottomColor: 'transparent',
+    marginRight: 3,
+  },
+  skipTriangleRight: {
+    borderLeftWidth: 12,
+    borderLeftColor: '#ffffff',
+    borderTopWidth: 10,
+    borderTopColor: 'transparent',
+    borderBottomWidth: 10,
+    borderBottomColor: 'transparent',
+    marginLeft: -2,
+  },
+  skipTriangleRight2: {
+    borderLeftWidth: 12,
+    borderLeftColor: '#ffffff',
+    borderTopWidth: 10,
+    borderTopColor: 'transparent',
+    borderBottomWidth: 10,
+    borderBottomColor: 'transparent',
+    marginLeft: 3,
+  },
+  skipTriangleDisabled: {
+    borderLeftColor: '#555',
+    borderRightColor: '#555',
+  },
+  // Repeat Icon
+  repeatIcon: {
+    width: 24,
+    height: 24,
+    position: 'relative',
+  },
+  repeatCircle: {
+    position: 'absolute',
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    borderWidth: 2,
+    borderColor: '#ffffff',
+    borderRightColor: 'transparent',
+    top: 2,
+    left: 2,
+    transform: [{ rotate: '45deg' }],
+  },
+  repeatCircleActive: {
+    borderColor: '#ff00ff',
+    borderRightColor: 'transparent',
+  },
+  repeatArrow: {
+    position: 'absolute',
+    width: 2,
+    height: 8,
+    backgroundColor: '#ffffff',
+    top: 0,
+    right: 4,
+    transform: [{ rotate: '45deg' }],
+  },
+  repeatArrowActive: {
+    backgroundColor: '#ff00ff',
+  },
+  repeatArrowHead1: {
+    position: 'absolute',
+    width: 0,
+    height: 0,
+    borderLeftWidth: 4,
+    borderLeftColor: '#ffffff',
+    borderTopWidth: 3,
+    borderTopColor: 'transparent',
+    borderBottomWidth: 3,
+    borderBottomColor: 'transparent',
+    top: 0,
+    right: 2,
+  },
+  repeatArrowHead2: {
+    position: 'absolute',
+    width: 0,
+    height: 0,
+    borderLeftWidth: 4,
+    borderLeftColor: '#ffffff',
+    borderTopWidth: 3,
+    borderTopColor: 'transparent',
+    borderBottomWidth: 3,
+    borderBottomColor: 'transparent',
+    top: 3,
+    right: 2,
+  },
+  repeatArrowHeadActive: {
+    borderLeftColor: '#ff00ff',
   },
 });
 

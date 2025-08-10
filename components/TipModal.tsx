@@ -311,6 +311,8 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0, 0, 0, 0.5)',
     justifyContent: 'center',
     alignItems: 'center',
+    zIndex: 9999,
+    elevation: 9999,
   },
   modalContent: {
     backgroundColor: '#fff',
@@ -319,6 +321,8 @@ const styles = StyleSheet.create({
     width: '90%',
     maxWidth: 400,
     overflow: 'hidden',
+    zIndex: 10000,
+    elevation: 10000,
   },
   modalHeader: {
     flexDirection: 'row',

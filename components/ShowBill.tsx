@@ -157,6 +157,7 @@ const ShowBill: React.FC<ShowBillProps> = ({ route }) => {
   const [backlines, setBacklines] = useState<BacklineInfo[]>([]);
   const [showBacklineModal, setShowBacklineModal] = useState(false);
   const [isUserOnShow, setIsUserOnShow] = useState(false);
+  const [hasAvailableBacklineOptions, setHasAvailableBacklineOptions] = useState(true);
 
   // Animation refs - matching bandPublicProfile.tsx exactly
   const panelTranslateY = useRef(new Animated.Value(COLLAPSED_TRANSLATE_Y)).current;
@@ -320,6 +321,60 @@ const ShowBill: React.FC<ShowBillProps> = ({ route }) => {
       }
     } catch (error) {
       console.error('Error fetching backlines:', error);
+    }
+  };
+
+  // Check if user has available backline options
+  const checkBacklineAvailability = async (userId: string) => {
+    try {
+      // Get user's artist profile
+      const { data: artistData } = await supabase
+        .from('artists')
+        .select('artist_id')
+        .eq('spotter_id', userId)
+        .single();
+
+      if (!artistData) {
+        setHasAvailableBacklineOptions(false);
+        return;
+      }
+
+      // Get user's bands
+      const { data: bandsData } = await supabase
+        .from('bands')
+        .select('band_id')
+        .contains('band_members', [artistData.artist_id]);
+
+      // Get existing backlines for this show
+      const backlineResult = await backlinesService.getShowBacklines(show_id, userId);
+      
+      if (backlineResult.success && backlineResult.data) {
+        const existingBacklines = backlineResult.data;
+        
+        // Check if user already applied as solo artist
+        const hasAppliedAsSolo = existingBacklines.some(
+          bl => bl.backlineArtist === artistData.artist_id && bl.backlineArtistType === 'artist'
+        );
+        
+        // Check how many bands have been used for backlines
+        const usedBandIds = existingBacklines
+          .filter(bl => bl.backlineArtistType === 'band')
+          .map(bl => bl.backlineArtist);
+        
+        const availableBands = (bandsData || []).filter(
+          band => !usedBandIds.includes(band.band_id)
+        );
+        
+        // User has options if they haven't applied as solo OR have available bands
+        const hasOptions = (!hasAppliedAsSolo) || (availableBands.length > 0);
+        setHasAvailableBacklineOptions(hasOptions);
+      } else {
+        // If no existing backlines, user has all options available
+        setHasAvailableBacklineOptions(true);
+      }
+    } catch (error) {
+      console.error('Error checking backline availability:', error);
+      setHasAvailableBacklineOptions(true); // Default to true on error
     }
   };
 
@@ -571,8 +626,11 @@ const ShowBill: React.FC<ShowBillProps> = ({ route }) => {
         
         setPerformers(validPerformers);
 
-        // Fetch backlines data
+        // Fetch backlines data and check availability
         await fetchBacklines(session?.user?.id);
+        if (session?.user?.id) {
+          await checkBacklineAvailability(session.user.id);
+        }
       }
 
       // Fade in animation - matching bandPublicProfile.tsx
@@ -743,8 +801,8 @@ const ShowBill: React.FC<ShowBillProps> = ({ route }) => {
       case 'backlines':
         return (
           <View style={styles.tabContent}>
-            {/* Add Backline Button - only show if user is not on the show */}
-            {currentUser && !isUserOnShow && (
+            {/* Add Backline Button - only show if user is not on the show and has available options */}
+            {currentUser && !isUserOnShow && hasAvailableBacklineOptions && (
               <TouchableOpacity
                 style={styles.addBacklineButton}
                 onPress={() => setShowBacklineModal(true)}
@@ -1280,21 +1338,27 @@ const ShowBill: React.FC<ShowBillProps> = ({ route }) => {
             style={styles.tabsContainer}
             bounces={false}
             showsVerticalScrollIndicator={false}
+            contentContainerStyle={{ paddingBottom: 100 }}
           >
-            {tabs.map((tab) => (
-              <View key={tab.id} style={styles.tabSection}>
+            {tabs.map((tab, index) => (
+              <View key={tab.id} style={styles.tabContainer}>
                 <TouchableOpacity
-                  style={styles.tabHeader}
+                  style={[
+                    styles.dropdownTab,
+                    tab.expanded && styles.dropdownTabExpanded,
+                    index === tabs.length - 1 && styles.lastTab,
+                  ]}
                   onPress={() => toggleTab(tab.id)}
+                  activeOpacity={0.7}
                 >
-                  <Text style={styles.tabTitle}>{tab.title}</Text>
-                  <Text style={[styles.tabIcon, { transform: [{ rotate: tab.expanded ? '180deg' : '0deg' }] }]}>
+                  <Text style={styles.dropdownText}>{tab.title}</Text>
+                  <Text style={[styles.arrow, { transform: [{ rotate: tab.expanded ? '180deg' : '0deg' }] }]}>
                     ▼
                   </Text>
                 </TouchableOpacity>
                 
                 {tab.expanded && (
-                  <View style={styles.tabContentExpanded}>
+                  <View style={styles.dropdownContent}>
                     {renderTabContent(tab.id)}
                   </View>
                 )}
@@ -1373,8 +1437,11 @@ const ShowBill: React.FC<ShowBillProps> = ({ route }) => {
         visible={showBacklineModal}
         onClose={() => setShowBacklineModal(false)}
         showId={show_id}
-        onApplicationSubmitted={() => {
-          fetchBacklines(currentUser?.id);
+        onApplicationSubmitted={async () => {
+          await fetchBacklines(currentUser?.id);
+          if (currentUser?.id) {
+            await checkBacklineAvailability(currentUser.id);
+          }
         }}
       />
     </View>
@@ -1553,35 +1620,44 @@ const styles = StyleSheet.create({
   tabsContainer: {
     flex: 1,
   },
-  tabSection: {
-    marginBottom: 8,
+  tabContainer: {
+    backgroundColor: "#fff",
   },
-  tabHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 15,
+  dropdownTab: {
+    height: TAB_HEIGHT,
+    borderBottomWidth: 1,
+    borderColor: "#f0f0f0",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
     paddingHorizontal: 20,
-    backgroundColor: '#f8f9fa',
-    borderRadius: 8,
-    marginHorizontal: 10,
+    backgroundColor: "#fff",
   },
-  tabTitle: {
+  dropdownTabExpanded: {
+    backgroundColor: "#f8f8f8",
+    borderBottomColor: "#ff00ff",
+  },
+  lastTab: {
+    borderBottomWidth: 0,
+  },
+  dropdownText: {
+    fontSize: 18,
+    fontFamily: "Amiko-Regular",
+    color: "#333",
+    textTransform: "capitalize",
+    fontWeight: "500",
+  },
+  arrow: {
     fontSize: 16,
-    fontFamily: 'Amiko-Regular',
-    color: '#333',
-    fontWeight: '600',
+    color: "#ff00ff",
+    fontWeight: "bold",
   },
-  tabIcon: {
-    fontSize: 14,
-    color: '#666',
-  },
-  tabContentExpanded: {
-    backgroundColor: '#fff',
-    marginHorizontal: 10,
-    borderRadius: 8,
-    marginTop: 4,
-    padding: 15,
+  dropdownContent: {
+    backgroundColor: "#fff",
+    paddingHorizontal: 20,
+    paddingVertical: 15,
+    borderBottomWidth: 1,
+    borderColor: "#f0f0f0",
   },
   tabContent: {
     flex: 1,

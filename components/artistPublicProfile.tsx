@@ -28,12 +28,15 @@ import TicketPurchaseModal from "./TicketPurchaseModal";
 import SongPurchaseModal from "./SongPurchaseModal";
 import AlbumPurchaseModal from "./AlbumPurchaseModal";
 import ShowVoteButton from "./ShowVoteButton";
+import { backlinesService } from "../services/backlinesService";
 import RatingModal from "./RatingModal";
 import { ratingService, RatingInfo } from '../services/ratingService';
 import { followerService, FollowerInfo } from '../services/followerService';
 import TipModal from "./TipModal";
+import BetaDisclaimer from "./BetaDisclaimer";
 import { formatShowDateTime } from '../utils/showDateDisplay';
 import { albumService, Album } from '../services/albumService';
+import AlbumImageUploadModal from './AlbumImageUploadModal';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get("window");
 // iPhone 16 specific dimensions for gesture positioning - matching profile.tsx exactly
@@ -111,6 +114,7 @@ const ArtistPublicProfile: React.FC<ArtistPublicProfileProps> = ({ route }) => {
   // Artist data states
   const [artistData, setArtistData] = useState<ArtistData | null>(null);
   const [songs, setSongs] = useState<Song[]>([]);
+  const [backliningShows, setBackliningShows] = useState<any[]>([]);
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [isOwner, setIsOwner] = useState(false);
   
@@ -122,6 +126,13 @@ const ArtistPublicProfile: React.FC<ArtistPublicProfileProps> = ({ route }) => {
   
   // Albums data
   const [albums, setAlbums] = useState<Album[]>([]);
+  const [expandedAlbums, setExpandedAlbums] = useState<Set<string>>(new Set());
+  
+  // Album image upload modal state
+  const [showAlbumImageUploadModal, setShowAlbumImageUploadModal] = useState(false);
+  const [editingAlbumId, setEditingAlbumId] = useState<string | null>(null);
+  const [editingAlbumTitle, setEditingAlbumTitle] = useState<string>('');
+  const [currentAlbumImage, setCurrentAlbumImage] = useState<string | undefined>(undefined);
   
   // Rating states
   const [showRatingModal, setShowRatingModal] = useState(false);
@@ -133,6 +144,8 @@ const ArtistPublicProfile: React.FC<ArtistPublicProfileProps> = ({ route }) => {
   
   // Tip states
   const [showTipModal, setShowTipModal] = useState(false);
+  const [showBetaDisclaimer, setShowBetaDisclaimer] = useState(false);
+  const [pendingAction, setPendingAction] = useState<{type: string, data?: any} | null>(null);
   
   // Common states - matching profile.tsx exactly
   const [loading, setLoading] = useState(true);
@@ -394,6 +407,39 @@ const ArtistPublicProfile: React.FC<ArtistPublicProfileProps> = ({ route }) => {
     setRatingInfo(newRating);
   };
 
+  // Beta disclaimer handlers
+  const handleBetaAction = (actionType: string, actionData?: any) => {
+    setPendingAction({ type: actionType, data: actionData });
+    setShowBetaDisclaimer(true);
+  };
+
+  const handleBetaProceed = () => {
+    setShowBetaDisclaimer(false);
+    
+    if (pendingAction) {
+      switch (pendingAction.type) {
+        case 'tip':
+          setShowTipModal(true);
+          break;
+        case 'ticket':
+          handleTicketPurchase(pendingAction.data);
+          break;
+        case 'song':
+          handleSongPurchase(pendingAction.data);
+          break;
+        case 'album':
+          handleAlbumPurchase(pendingAction.data);
+          break;
+      }
+      setPendingAction(null);
+    }
+  };
+
+  const handleBetaCancel = () => {
+    setShowBetaDisclaimer(false);
+    setPendingAction(null);
+  };
+
   // Fetch follower info for the artist
   const fetchFollowerInfo = async (artistId: string, userId?: string) => {
     try {
@@ -466,14 +512,15 @@ const ArtistPublicProfile: React.FC<ArtistPublicProfileProps> = ({ route }) => {
         setArtistData(artist);
       }
 
-      // Get artist-specific songs (only show active approved artist songs)
+      // Get artist-specific songs (only show active approved artist songs, NOT band songs)
       let songsQuery = supabase
         .from('songs')
         .select('*')
         .eq('artist_id', artist_id)
         .eq('song_type', 'artist')
         .eq('song_status', 'active')
-        .eq('song_approved', true);
+        .eq('song_approved', true)
+        .is('band_id', null); // Explicitly exclude songs with band_id
 
       const { data: artistSongs, error: songsError } = await songsQuery
         .order('created_at', { ascending: false });
@@ -484,9 +531,33 @@ const ArtistPublicProfile: React.FC<ArtistPublicProfileProps> = ({ route }) => {
       });
 
       if (!songsError && artistSongs) {
-        setSongs(artistSongs);
-        console.log('🎵 Songs set:', artistSongs.map(s => ({ 
+        // Additional filtering to ensure we only get true artist songs
+        const filteredSongs = artistSongs.filter(song => {
+          const isValidArtistSong = (
+            song.song_type === 'artist' && 
+            song.artist_id === artist_id &&
+            song.band_id === null // Ensure no band_id for artist songs
+          );
+          
+          if (!isValidArtistSong) {
+            console.log('🚫 Filtering out song:', {
+              title: song.song_title,
+              song_type: song.song_type,
+              artist_id: song.artist_id,
+              band_id: song.band_id,
+              expected_artist_id: artist_id
+            });
+          }
+          
+          return isValidArtistSong;
+        });
+        
+        setSongs(filteredSongs);
+        console.log('🎵 Songs set:', filteredSongs.map(s => ({ 
           title: s.song_title, 
+          song_type: s.song_type,
+          artist_id: s.artist_id,
+          band_id: s.band_id,
           status: s.song_status, 
           approved: s.song_approved 
         })));
@@ -509,6 +580,9 @@ const ArtistPublicProfile: React.FC<ArtistPublicProfileProps> = ({ route }) => {
 
       // Fetch follower info for this artist
       await fetchFollowerInfo(artist_id, session?.user?.id);
+      
+      // Fetch backlining shows for this artist
+      await fetchBackliningShows(artist_id);
 
       // Fade in animation - matching bandPublicProfile.tsx
       Animated.timing(fadeAnim, {
@@ -671,6 +745,26 @@ const ArtistPublicProfile: React.FC<ArtistPublicProfileProps> = ({ route }) => {
     }
   };
 
+  // Fetch backlining shows for this artist
+  const fetchBackliningShows = async (artistId: string) => {
+    try {
+      console.log('🎤 Fetching backlining shows for artist:', artistId);
+      
+      const result = await backlinesService.getBackliningShows(artistId, 'artist');
+      
+      if (result.success && result.data) {
+        console.log('🎤 Found backlining shows for artist:', result.data.length);
+        setBackliningShows(result.data);
+      } else {
+        console.error('Error fetching backlining shows:', result.error);
+        setBackliningShows([]);
+      }
+    } catch (error) {
+      console.error('Error fetching backlining shows:', error);
+      setBackliningShows([]);
+    }
+  };
+
   useEffect(() => {
     fetchArtistData();
   }, [artist_id]);
@@ -716,7 +810,7 @@ const ArtistPublicProfile: React.FC<ArtistPublicProfileProps> = ({ route }) => {
           <Text style={styles.songPrice}>${song.song_price}</Text>
           <TouchableOpacity
             style={styles.songPurchaseButton}
-            onPress={() => handleSongPurchase(song)}
+            onPress={() => handleBetaAction('song', song)}
           >
             <Text style={styles.songPurchaseButtonText}>+</Text>
           </TouchableOpacity>
@@ -742,6 +836,66 @@ const ArtistPublicProfile: React.FC<ArtistPublicProfileProps> = ({ route }) => {
         ...(artistData.artist_secondary_images || [])
       ].filter(Boolean),
     };
+  };
+
+  // Get album image with fallback to artist profile image
+  const getAlbumImageUrl = (album: Album): string => {
+    if (album.album_image) {
+      // If album has its own image, use it
+      if (album.album_image.startsWith('http')) {
+        return album.album_image;
+      }
+      // Assume it's a storage path
+      const { data } = supabase.storage
+        .from('song-images')
+        .getPublicUrl(album.album_image);
+      return data.publicUrl;
+    }
+    
+    // Fallback to artist profile image
+    if (artistData?.artist_profile_image) {
+      return artistData.artist_profile_image;
+    }
+    
+    // Final fallback
+    return 'https://via.placeholder.com/150';
+  };
+
+  // Toggle album expansion
+  const toggleAlbumExpansion = (albumId: string) => {
+    setExpandedAlbums(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(albumId)) {
+        newSet.delete(albumId);
+      } else {
+        newSet.add(albumId);
+      }
+      return newSet;
+    });
+  };
+
+  // Album image upload handlers
+  const handleAlbumImageUploaded = (imageUrl: string) => {
+    // Update the local album state
+    setAlbums(prevAlbums => 
+      prevAlbums.map(album => 
+        album.album_id === editingAlbumId 
+          ? { ...album, album_image: imageUrl }
+          : album
+      )
+    );
+    // Close modal and reset state
+    setShowAlbumImageUploadModal(false);
+    setEditingAlbumId(null);
+    setEditingAlbumTitle('');
+    setCurrentAlbumImage(undefined);
+  };
+
+  const handleAlbumImageUploadClose = () => {
+    setShowAlbumImageUploadModal(false);
+    setEditingAlbumId(null);
+    setEditingAlbumTitle('');
+    setCurrentAlbumImage(undefined);
   };
 
   // Render tab content - matching bandPublicProfile.tsx exactly
@@ -775,40 +929,107 @@ const ArtistPublicProfile: React.FC<ArtistPublicProfileProps> = ({ route }) => {
         return (
           <View style={styles.tabContent}>
             <ScrollView 
-              style={styles.albumsContainer}
+              style={styles.albumsList}
               showsVerticalScrollIndicator={false}
               nestedScrollEnabled={true}
             >
               {albums.length > 0 ? (
                 albums.map((album) => (
-                  <View key={album.album_id} style={styles.albumItem}>
-                    <Image
-                      source={{ 
-                        uri: getImageUrl(album.album_image) || 'https://via.placeholder.com/80'
-                      }}
-                      style={styles.albumImage}
-                    />
-                    <View style={styles.albumInfo}>
-                      <Text style={styles.albumTitle}>{album.album_title}</Text>
-                      <Text style={styles.albumDetails}>
-                        {album.album_song_data?.length || 0} song{(album.album_song_data?.length || 0) !== 1 ? 's' : ''}
-                      </Text>
-                      <Text style={styles.albumPrice}>
-                        {album.album_price === '0' ? 'Free' : `$${album.album_price}`}
-                      </Text>
-                      {album.album_status === 'pending' && (
-                        <Text style={styles.albumPendingText}>Pending Approval</Text>
-                      )}
-                    </View>
-                    <TouchableOpacity
-                      style={styles.albumPurchaseButton}
-                      onPress={() => handleAlbumPurchase(album)}
-                      disabled={album.album_status !== 'active'}
+                  <View key={album.album_id} style={[styles.albumItemContainer, album.album_status === 'pending' && styles.pendingAlbumContainer]}>
+                    <TouchableOpacity 
+                      style={styles.albumHeader} 
+                      onPress={() => toggleAlbumExpansion(album.album_id)}
+                      activeOpacity={0.7}
                     >
-                      <Text style={styles.albumPurchaseButtonText}>
-                        {album.album_price === '0' ? 'Download' : 'Buy'}
-                      </Text>
+                      <Image 
+                        source={{ uri: getAlbumImageUrl(album) }}
+                        style={styles.albumImage}
+                        resizeMode="cover"
+                      />
+                      <View style={styles.albumInfo}>
+                        <View style={styles.albumTitleContainer}>
+                          <Text style={styles.albumTitle} numberOfLines={1}>
+                            {album.album_title}
+                          </Text>
+                          {album.album_status === 'pending' && (
+                            <Text style={styles.pendingLabel}>PENDING APPROVAL</Text>
+                          )}
+                        </View>
+                        <Text style={styles.albumDetails}>
+                          {album.album_song_data?.length || 0} song{(album.album_song_data?.length || 0) !== 1 ? 's' : ''} • ${album.album_price}
+                        </Text>
+                      </View>
+                      <View style={styles.albumActions}>
+                        {isOwner && (
+                          <TouchableOpacity
+                            style={styles.albumEditImageButton}
+                            onPress={(e) => {
+                              e.stopPropagation();
+                              setEditingAlbumId(album.album_id);
+                              setEditingAlbumTitle(album.album_title);
+                              setCurrentAlbumImage(album.album_image);
+                              setShowAlbumImageUploadModal(true);
+                            }}
+                          >
+                            <Text style={styles.albumEditImageButtonText}>📷</Text>
+                          </TouchableOpacity>
+                        )}
+                        {album.album_status === 'active' && (
+                          <TouchableOpacity
+                            style={styles.albumPurchaseButton}
+                            onPress={(e) => {
+                              e.stopPropagation();
+                              handleBetaAction('album', album);
+                            }}
+                          >
+                            <Text style={styles.albumPurchaseButtonText}>
+                              {album.album_price === '0' ? 'Download' : 'Buy'}
+                            </Text>
+                          </TouchableOpacity>
+                        )}
+                        <Text style={[styles.expandArrow, expandedAlbums.has(album.album_id) && styles.expandArrowRotated]}>
+                          ▼
+                        </Text>
+                      </View>
                     </TouchableOpacity>
+                    
+                    {/* Expanded album content - show songs */}
+                    {expandedAlbums.has(album.album_id) && (
+                      <View style={styles.albumSongsContainer}>
+                        <Text style={styles.albumSongsTitle}>Songs in this album:</Text>
+                        {(album.album_song_data || []).map((song, index) => (
+                          <TouchableOpacity 
+                            key={`${song.song_id}-${index}`}
+                            style={styles.albumSongItem}
+                            onPress={() => {
+                              // Create a song object for playback
+                              const songForPlay = {
+                                song_id: song.song_id,
+                                song_title: song.song_title,
+                                song_file: song.song_file,
+                                song_image: song.song_image,
+                                song_price: '0', // Playing from album
+                                artist_id: song.song_artist || '',
+                                spotter_id: song.song_artist || '',
+                                created_at: new Date().toISOString(),
+                                song_type: song.song_type
+                              };
+                              handleSongPress(songForPlay);
+                            }}
+                          >
+                            <View style={styles.albumSongInfo}>
+                              <Text style={styles.albumSongTitle}>{song.song_title}</Text>
+                              <Text style={styles.albumSongArtist}>
+                                {song.artist_name || artistData?.artist_name}
+                              </Text>
+                            </View>
+                            <TouchableOpacity style={styles.albumSongPlayButton}>
+                              <Text style={styles.albumSongPlayText}>▶️</Text>
+                            </TouchableOpacity>
+                          </TouchableOpacity>
+                        ))}
+                      </View>
+                    )}
                   </View>
                 ))
               ) : (
@@ -864,7 +1085,7 @@ const ArtistPublicProfile: React.FC<ArtistPublicProfileProps> = ({ route }) => {
                               style={styles.buyTicketButton}
                               onPress={(e) => {
                                 e.stopPropagation();
-                                handleTicketPurchase(show);
+                                handleBetaAction('ticket', show);
                               }}
                             >
                               <Text style={styles.buyTicketText}>Buy Ticket</Text>
@@ -1027,6 +1248,82 @@ const ArtistPublicProfile: React.FC<ArtistPublicProfileProps> = ({ route }) => {
           </View>
         );
 
+      case 'backliningShows':
+        return (
+          <View style={styles.tabContent}>
+            {backliningShows.length > 0 ? (
+              <ScrollView showsVerticalScrollIndicator={false} nestedScrollEnabled={true}>
+                {backliningShows.map((show, index) => (
+                  <TouchableOpacity
+                    key={show.show_id}
+                    style={styles.showItem}
+                    onPress={() => {
+                      navigation.navigate('ShowBill' as never, {
+                        show_id: show.show_id
+                      } as never);
+                    }}
+                  >
+                    <View style={styles.showImageContainer}>
+                      <Image
+                        source={{
+                          uri: show.venue_profile_image || 'https://via.placeholder.com/80x80'
+                        }}
+                        style={styles.showVenueImage}
+                      />
+                    </View>
+                    <View style={styles.showInfoContainer}>
+                      <Text style={styles.showVenueName}>{show.venue_name}</Text>
+                      <Text style={styles.showDate}>
+                        {new Date(show.show_date).toLocaleDateString('en-US', {
+                          weekday: 'short',
+                          month: 'short',
+                          day: 'numeric',
+                          year: 'numeric'
+                        })}
+                        {show.show_time && ` at ${show.show_time}`}
+                      </Text>
+                      <View style={styles.showStatusContainer}>
+                        <View style={[
+                          styles.statusDot,
+                          show.show_status === 'active' && show.venue_decision
+                            ? styles.activeStatus
+                            : styles.pendingStatus
+                        ]} />
+                        <Text style={styles.showStatus}>
+                          {show.show_status === 'active' && show.venue_decision
+                            ? 'Confirmed Show'
+                            : 'Pending Venue Approval'
+                          }
+                        </Text>
+                      </View>
+                    </View>
+                    <View style={styles.showActionsContainer}>
+                      <ShowVoteButton
+                        showId={show.show_id}
+                        backlineArtist={artist_id}
+                        backlineArtistType="artist"
+                        onVoteUpdate={() => {
+                          // Optionally refresh data after vote
+                          console.log('Vote updated for backline');
+                        }}
+                      />
+                    </View>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            ) : (
+              <View style={styles.noDataContainer}>
+                <Text style={styles.noDataText}>
+                  {isOwner 
+                    ? "You haven't applied to backline any shows yet." 
+                    : "This artist isn't backlining any shows yet."
+                  }
+                </Text>
+              </View>
+            )}
+          </View>
+        );
+
       default:
         return (
           <View style={styles.tabContent}>
@@ -1050,7 +1347,7 @@ const ArtistPublicProfile: React.FC<ArtistPublicProfileProps> = ({ route }) => {
           showBackButton={true}
           onBackPress={() => navigation.goBack()}
           onNotificationPress={() => {
-            console.log('Notification pressed');
+            navigation.navigate('NotificationsPage' as never);
           }}
           onMessagePress={() => {
             navigation.navigate('MessagesPage' as never);
@@ -1076,7 +1373,7 @@ const ArtistPublicProfile: React.FC<ArtistPublicProfileProps> = ({ route }) => {
           showBackButton={true}
           onBackPress={() => navigation.goBack()}
           onNotificationPress={() => {
-            console.log('Notification pressed');
+            navigation.navigate('NotificationsPage' as never);
           }}
           onMessagePress={() => {
             navigation.navigate('MessagesPage' as never);
@@ -1108,7 +1405,7 @@ const ArtistPublicProfile: React.FC<ArtistPublicProfileProps> = ({ route }) => {
           showBackButton={true}
           onBackPress={() => navigation.goBack()}
           onNotificationPress={() => {
-            console.log('Notification pressed');
+            navigation.navigate('NotificationsPage' as never);
           }}
           onMessagePress={() => {
             navigation.navigate('MessagesPage' as never);
@@ -1187,49 +1484,37 @@ const ArtistPublicProfile: React.FC<ArtistPublicProfileProps> = ({ route }) => {
           
         </Animated.View>
 
-        {/* Rating button - positioned separately for better touch handling */}
-        <TouchableOpacity 
-          style={styles.ratingButton} 
-          onPress={handleRatingPress}
-          activeOpacity={0.7}
-        >
-          <LinearGradient
-            colors={["rgba(0, 0, 0, 0.8)", "rgba(0, 0, 0, 0.4)"]}
-            style={styles.ratingBackground}
-          >
-            <Text style={styles.ratingText}>
-              {ratingInfo ? 
-                '★'.repeat(Math.round(ratingInfo.currentRating)) + 
-                '☆'.repeat(5 - Math.round(ratingInfo.currentRating))
-                : '★★★★★'
-              }
-            </Text>
-            <Text style={styles.reviewText}>
-              {ratingInfo ? 
-                `${ratingInfo.currentRating.toFixed(1)} (${ratingInfo.totalRaters} review${ratingInfo.totalRaters !== 1 ? 's' : ''})`
-                : '5.0 (0 reviews)'
-              }
-            </Text>
-          </LinearGradient>
-        </TouchableOpacity>
-
-        {/* Tip button - positioned next to rating button */}
-        {!isOwner && (
-          <Animated.View style={[styles.tipButtonContainer, { opacity: nameOpacity }]}>
+        {/* Instagram-style Action Buttons */}
+        <Animated.View style={[styles.modernActionContainer, { opacity: nameOpacity }]}>
+          {/* Tip button on top - only show if not owner */}
+          {!isOwner && (
             <TouchableOpacity 
-              style={styles.tipButtonOverlay} 
-              onPress={() => setShowTipModal(true)}
+              style={styles.instagramActionButton} 
+              onPress={() => handleBetaAction('tip')}
               activeOpacity={0.7}
             >
-              <LinearGradient
-                colors={["rgba(0, 0, 0, 0.8)", "rgba(0, 0, 0, 0.4)"]}
-                style={styles.tipButtonBackground}
-              >
-                <Text style={styles.tipButtonText}>+</Text>
-              </LinearGradient>
+              <View style={styles.instagramButtonInner}>
+                <Text style={styles.instagramPlusIcon}>+</Text>
+                <Text style={styles.instagramButtonLabel}>Tip</Text>
+              </View>
             </TouchableOpacity>
-          </Animated.View>
-        )}
+          )}
+          
+          {/* Rating button below */}
+          <TouchableOpacity 
+            style={styles.instagramActionButton} 
+            onPress={handleRatingPress}
+            activeOpacity={0.7}
+          >
+            <View style={styles.instagramButtonInner}>
+              <Text style={styles.instagramStarIcon}>☆</Text>
+              <Text style={styles.instagramButtonLabel}>Rating</Text>
+              <Text style={styles.instagramRatingInfo}>
+                {ratingInfo ? ratingInfo.currentRating.toFixed(1) : '0.0'} • {ratingInfo?.totalRaters || 0}
+              </Text>
+            </View>
+          </TouchableOpacity>
+        </Animated.View>
 
         {/* Sliding panel - matching bandPublicProfile.tsx exactly */}
         <Animated.View
@@ -1258,26 +1543,32 @@ const ArtistPublicProfile: React.FC<ArtistPublicProfileProps> = ({ route }) => {
             </LinearGradient>
           </PanGestureHandler>
 
-          {/* Scrollable tabs */}
+          {/* Scrollable tabs - matching profile.tsx style */}
           <ScrollView
             style={styles.tabsContainer}
             bounces={false}
             showsVerticalScrollIndicator={false}
+            contentContainerStyle={{ paddingBottom: 100 }}
           >
-            {tabs.map((tab) => (
-              <View key={tab.id} style={styles.tabSection}>
+            {tabs.map((tab, index) => (
+              <View key={tab.id} style={styles.tabContainer}>
                 <TouchableOpacity
-                  style={styles.tabHeader}
+                  style={[
+                    styles.dropdownTab,
+                    tab.expanded && styles.dropdownTabExpanded,
+                    index === tabs.length - 1 && styles.lastTab,
+                  ]}
                   onPress={() => toggleTab(tab.id)}
+                  activeOpacity={0.7}
                 >
-                  <Text style={styles.tabTitle}>{tab.title}</Text>
-                  <Text style={[styles.tabIcon, { transform: [{ rotate: tab.expanded ? '180deg' : '0deg' }] }]}>
+                  <Text style={styles.dropdownText}>{tab.title}</Text>
+                  <Text style={[styles.arrow, { transform: [{ rotate: tab.expanded ? '180deg' : '0deg' }] }]}>
                     ▼
                   </Text>
                 </TouchableOpacity>
                 
                 {tab.expanded && (
-                  <View style={styles.tabContentExpanded}>
+                  <View style={styles.dropdownContent}>
                     {renderTabContent(tab.id)}
                   </View>
                 )}
@@ -1358,6 +1649,38 @@ const ArtistPublicProfile: React.FC<ArtistPublicProfileProps> = ({ route }) => {
         recipientType="artist"
         recipientName={artistData?.artist_name || 'Artist'}
       />
+
+      <BetaDisclaimer
+        visible={showBetaDisclaimer}
+        onClose={handleBetaCancel}
+        onProceed={handleBetaProceed}
+        action={
+          pendingAction?.type === 'tip' ? 'tip' :
+          pendingAction?.type === 'ticket' ? 'buy a ticket for' :
+          pendingAction?.type === 'song' ? 'purchase the song' :
+          pendingAction?.type === 'album' ? 'purchase the album' :
+          'make a purchase'
+        }
+        itemName={
+          pendingAction?.type === 'tip' ? artistData?.artist_name :
+          pendingAction?.type === 'ticket' ? pendingAction?.data?.show_name :
+          pendingAction?.type === 'song' ? pendingAction?.data?.title :
+          pendingAction?.type === 'album' ? pendingAction?.data?.title :
+          undefined
+        }
+      />
+
+      {/* Album Image Upload Modal */}
+      {editingAlbumId && (
+        <AlbumImageUploadModal
+          visible={showAlbumImageUploadModal}
+          onClose={handleAlbumImageUploadClose}
+          albumId={editingAlbumId}
+          albumTitle={editingAlbumTitle}
+          onImageUploaded={handleAlbumImageUploaded}
+          currentImageUrl={currentAlbumImage}
+        />
+      )}
     </View>
   );
 };
@@ -1492,7 +1815,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   tabsContainer: {
-    paddingVertical: 10,
+    flex: 1,
   },
   tabsScrollView: {
     paddingHorizontal: 20,
@@ -1673,54 +1996,59 @@ const styles = StyleSheet.create({
     fontFamily: 'Audiowide-Regular',
     color: '#fff',
   },
-  ratingButton: {
+  // Instagram-style action buttons
+  modernActionContainer: {
     position: 'absolute',
-    bottom: 140, // Position above the collapsed tabs panel
+    bottom: 140,
     right: 20,
-    zIndex: 1000, // High z-index to ensure it's above image touch areas
-    elevation: 10, // Android shadow/elevation
-  },
-  ratingBackground: {
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 15,
     alignItems: 'center',
-  },
-  ratingText: {
-    fontSize: 16,
-    color: '#FFD700',
-    marginBottom: 2,
-  },
-  reviewText: {
-    fontSize: 12,
-    color: '#fff',
-    fontFamily: 'Amiko-Regular',
-  },
-  // Tip button styles
-  tipButtonContainer: {
-    position: 'absolute',
-    bottom: 140, // Same as rating button
-    left: 20, // Position on the left side
     zIndex: 1000,
     elevation: 10,
   },
-  tipButtonOverlay: {
-    // Container for touch handling
-  },
-  tipButtonBackground: {
+  instagramActionButton: {
+    backgroundColor: 'transparent',
+    borderWidth: 2,
+    borderColor: '#fff',
+    borderRadius: 8,
     paddingHorizontal: 12,
     paddingVertical: 8,
-    borderRadius: 15,
-    alignItems: 'center',
-    justifyContent: 'center',
-    minWidth: 40,
-    minHeight: 40,
+    minWidth: 60,
+    marginBottom: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    elevation: 5,
   },
-  tipButtonText: {
-    fontSize: 20,
+  instagramButtonInner: {
+    alignItems: 'center',
+  },
+  instagramStarIcon: {
+    fontSize: 24,
     color: '#fff',
-    fontWeight: 'bold',
-    textAlign: 'center',
+    fontWeight: '400',
+    marginBottom: 2,
+  },
+  instagramPlusIcon: {
+    fontSize: 24,
+    color: '#fff',
+    fontWeight: '300',
+    marginBottom: 2,
+  },
+  instagramButtonLabel: {
+    fontSize: 11,
+    color: '#fff',
+    fontWeight: '500',
+    fontFamily: 'Amiko-Regular',
+    marginTop: 2,
+  },
+  instagramRatingInfo: {
+    fontSize: 10,
+    color: '#fff',
+    fontWeight: '400',
+    fontFamily: 'Amiko-Regular',
+    marginTop: 2,
+    opacity: 0.9,
   },
   nameRatingOverlay: {
     position: 'absolute',
@@ -1776,35 +2104,45 @@ const styles = StyleSheet.create({
     position: "absolute",
     left: 20,
   },
-  tabSection: {
-    marginBottom: 8,
+  // Tab styles - matching profile.tsx
+  tabContainer: {
+    backgroundColor: "#fff",
   },
-  tabHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 15,
+  dropdownTab: {
+    height: TAB_HEIGHT,
+    borderBottomWidth: 1,
+    borderColor: "#f0f0f0",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
     paddingHorizontal: 20,
-    backgroundColor: '#f8f9fa',
-    borderRadius: 8,
-    marginHorizontal: 10,
+    backgroundColor: "#fff",
   },
-  tabTitle: {
+  dropdownTabExpanded: {
+    backgroundColor: "#f8f8f8",
+    borderBottomColor: "#ff00ff",
+  },
+  lastTab: {
+    borderBottomWidth: 0,
+  },
+  dropdownText: {
+    fontSize: 18,
+    fontFamily: "Amiko-Regular",
+    color: "#333",
+    textTransform: "capitalize",
+    fontWeight: "500",
+  },
+  arrow: {
     fontSize: 16,
-    fontFamily: 'Amiko-Regular',
-    color: '#333',
-    fontWeight: '600',
+    color: "#ff00ff",
+    fontWeight: "bold",
   },
-  tabIcon: {
-    fontSize: 14,
-    color: '#666',
-  },
-  tabContentExpanded: {
-    backgroundColor: '#fff',
-    marginHorizontal: 10,
-    borderRadius: 8,
-    marginTop: 4,
-    padding: 15,
+  dropdownContent: {
+    backgroundColor: "#fff",
+    paddingHorizontal: 20,
+    paddingVertical: 15,
+    borderBottomWidth: 1,
+    borderColor: "#f0f0f0",
   },
   followButton: {
     position: 'absolute',
@@ -1997,23 +2335,29 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   
-  // Album styles
-  albumsContainer: {
+  // Album styles - matching bandPublicProfile.tsx
+  albumsList: {
     maxHeight: 400,
   },
-  albumItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 15,
-    paddingHorizontal: 15,
+  albumItemContainer: {
     backgroundColor: '#fff',
-    marginBottom: 10,
     borderRadius: 12,
+    marginBottom: 15,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
     shadowRadius: 4,
     elevation: 3,
+    overflow: 'hidden',
+  },
+  pendingAlbumContainer: {
+    borderWidth: 2,
+    borderColor: '#ffc107',
+  },
+  albumHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 15,
   },
   albumImage: {
     width: 80,
@@ -2026,45 +2370,131 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
   },
+  albumTitleContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 4,
+  },
   albumTitle: {
     fontSize: 16,
     fontFamily: 'Amiko-Regular',
     color: '#333',
     fontWeight: '600',
-    marginBottom: 4,
+    marginRight: 8,
+  },
+  pendingLabel: {
+    fontSize: 10,
+    color: '#ffc107',
+    backgroundColor: 'rgba(255, 193, 7, 0.1)',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+    borderWidth: 1,
+    borderColor: '#ffc107',
+    fontWeight: '600',
   },
   albumDetails: {
     fontSize: 14,
     fontFamily: 'Amiko-Regular',
     color: '#666',
-    marginBottom: 2,
   },
-  albumPrice: {
+  albumActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  albumEditImageButton: {
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.3)',
+  },
+  albumEditImageButtonText: {
     fontSize: 14,
-    fontFamily: 'Amiko-Regular',
-    color: '#28a745',
-    fontWeight: '600',
-  },
-  albumPendingText: {
-    fontSize: 12,
-    fontFamily: 'Amiko-Regular',
-    color: '#ffc107',
-    fontWeight: '600',
-    marginTop: 2,
+    color: '#ff00ff',
   },
   albumPurchaseButton: {
     backgroundColor: '#ff00ff',
-    paddingHorizontal: 20,
+    paddingHorizontal: 16,
     paddingVertical: 8,
-    borderRadius: 20,
-    minWidth: 80,
+    borderRadius: 15,
+    justifyContent: 'center',
     alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.2,
+    shadowRadius: 2,
+    elevation: 2,
   },
   albumPurchaseButtonText: {
-    color: '#fff',
     fontSize: 14,
+    color: '#fff',
+    fontWeight: 'bold',
     fontFamily: 'Amiko-Regular',
+  },
+  expandArrow: {
+    fontSize: 14,
+    color: '#666',
+    marginLeft: 8,
+    transform: [{ rotate: '0deg' }],
+  },
+  expandArrowRotated: {
+    transform: [{ rotate: '180deg' }],
+  },
+  albumSongsContainer: {
+    paddingHorizontal: 15,
+    paddingBottom: 15,
+    backgroundColor: '#f8f9fa',
+    borderTopWidth: 1,
+    borderTopColor: '#eee',
+  },
+  albumSongsTitle: {
+    fontSize: 14,
     fontWeight: '600',
+    color: '#333',
+    marginBottom: 10,
+    paddingTop: 10,
+  },
+  albumSongItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    backgroundColor: '#fff',
+    borderRadius: 8,
+    marginBottom: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+    elevation: 1,
+  },
+  albumSongInfo: {
+    flex: 1,
+  },
+  albumSongTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#333',
+    marginBottom: 2,
+  },
+  albumSongArtist: {
+    fontSize: 12,
+    color: '#666',
+  },
+  albumSongPlayButton: {
+    width: 30,
+    height: 30,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  albumSongPlayText: {
+    fontSize: 12,
   },
   noAlbumsText: {
     fontSize: 16,
@@ -2094,6 +2524,60 @@ const styles = StyleSheet.create({
   voteCountText: {
     fontSize: 10,
     color: '#666',
+  },
+  showImageContainer: {
+    marginRight: 15,
+  },
+  showVenueImage: {
+    width: 60,
+    height: 60,
+    borderRadius: 8,
+  },
+  showInfoContainer: {
+    flex: 1,
+    marginRight: 15,
+  },
+  showVenueName: {
+    fontSize: 16,
+    fontFamily: 'Amiko-Regular',
+    fontWeight: '600',
+    color: '#333',
+    marginBottom: 4,
+  },
+  showStatusContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 6,
+  },
+  statusDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    marginRight: 6,
+  },
+  activeStatus: {
+    backgroundColor: '#28a745',
+  },
+  pendingStatus: {
+    backgroundColor: '#ffc107',
+  },
+  showActionsContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    minWidth: 80,
+  },
+  noDataContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 40,
+    paddingHorizontal: 20,
+  },
+  noDataText: {
+    fontSize: 16,
+    fontFamily: 'Amiko-Regular',
+    color: '#666',
+    textAlign: 'center',
+    fontStyle: 'italic',
   },
 });
 

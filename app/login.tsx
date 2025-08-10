@@ -23,31 +23,32 @@ const LogIn = ({ navigation }: Props) => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
+  const [errorMessage, setErrorMessage] = useState('');
 
   const handleLogIn = async () => {
     if (loading) return;
 
     if (!email || !password) {
-      Alert.alert('Missing Info', 'Please enter both email and password');
+      setErrorMessage('Please enter both email and password');
       return;
     }
 
     try {
       setLoading(true);
+      setErrorMessage(''); // Clear any previous errors
 
       const { error } = await supabase.auth.signInWithPassword({ email, password });
 
       if (error) {
         console.error('Login Error:', error);
-        Alert.alert('Login Failed', error.message);
-        return navigation.navigate('Failure');
+        setErrorMessage(error.message || 'Login failed. Please try again.');
+        return;
       }
 
       navigation.navigate('BottomTabs');
     } catch (err) {
       console.error('Unexpected Error:', err);
-      Alert.alert('Error', 'An unexpected error occurred');
-      navigation.navigate('Failure');
+      setErrorMessage('An unexpected error occurred. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -69,7 +70,10 @@ const LogIn = ({ navigation }: Props) => {
             keyboardType="email-address"
             autoCapitalize="none"
             value={email}
-            onChangeText={setEmail}
+            onChangeText={(text) => {
+              setEmail(text);
+              setErrorMessage(''); // Clear error when user starts typing
+            }}
           />
 
           <TextInput
@@ -78,8 +82,18 @@ const LogIn = ({ navigation }: Props) => {
             placeholderTextColor="#b4b3b3"
             secureTextEntry
             value={password}
-            onChangeText={setPassword}
+            onChangeText={(text) => {
+              setPassword(text);
+              setErrorMessage(''); // Clear error when user starts typing
+            }}
           />
+
+          {/* Error Message */}
+          {errorMessage ? (
+            <View style={styles.errorContainer}>
+              <Text style={styles.errorText}>{errorMessage}</Text>
+            </View>
+          ) : null}
 
           <TouchableOpacity
             style={[styles.button, { opacity: loading ? 0.5 : 1 }]}
@@ -145,6 +159,7 @@ const styles = StyleSheet.create({
     fontFamily: 'Amiko-Regular',
   },
   signupLink: {
+    width: '100%',
     marginTop: 20,
     borderRadius: 12,
     paddingVertical: 15,
@@ -153,6 +168,22 @@ const styles = StyleSheet.create({
   signupText: {
     color: '#fff',
     fontSize: 16,
+    fontFamily: 'Amiko-Regular',
+    textAlign: 'center',
+  },
+  errorContainer: {
+    width: '100%',
+    backgroundColor: 'rgba(255, 0, 0, 0.1)',
+    borderColor: '#ff0000',
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginBottom: 15,
+  },
+  errorText: {
+    color: '#ff0000',
+    fontSize: 14,
     fontFamily: 'Amiko-Regular',
     textAlign: 'center',
   },

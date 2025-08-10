@@ -48,54 +48,26 @@ interface CurrentEntity {
 }
 
 class MessagingService {
-  // Get current user's entity info (spotter, artist, or venue)
+  // Get current user's entity info - ALWAYS returns spotter for viewing messages
   async getCurrentEntity(userId: string): Promise<ServiceResponse<CurrentEntity>> {
     try {
-      // First check if user is a spotter
+      // According to requirements: all users receive messages as spotters
       const { data: spotter } = await supabase
         .from('spotters')
-        .select('spotter_id')
-        .eq('spotter_id', userId)
+        .select('id')
+        .eq('id', userId)
         .single();
 
       if (spotter) {
         return { 
           success: true, 
-          data: { id: spotter.spotter_id, type: 'spotter' }
-        };
-      }
-
-      // Check if user is an artist
-      const { data: artist } = await supabase
-        .from('artists')
-        .select('artist_id')
-        .eq('spotter_id', userId)
-        .single();
-
-      if (artist) {
-        return { 
-          success: true, 
-          data: { id: artist.artist_id, type: 'artist' }
-        };
-      }
-
-      // Check if user is a venue
-      const { data: venue } = await supabase
-        .from('venues')
-        .select('venue_id')
-        .eq('spotter_id', userId)
-        .single();
-
-      if (venue) {
-        return { 
-          success: true, 
-          data: { id: venue.venue_id, type: 'venue' }
+          data: { id: spotter.id, type: 'spotter' }
         };
       }
 
       return { 
         success: false, 
-        error: 'No entity found for user' 
+        error: 'No spotter found for user' 
       };
     } catch (error) {
       console.error('Error getting current entity:', error);
@@ -106,7 +78,90 @@ class MessagingService {
     }
   }
 
-  // Send a message
+  // Get all possible sender identities for a user
+  async getUserIdentities(userId: string): Promise<ServiceResponse<CurrentEntity[]>> {
+    try {
+      const identities: CurrentEntity[] = [];
+
+      // Check spotter
+      const { data: spotter } = await supabase
+        .from('spotters')
+        .select('id')
+        .eq('id', userId)
+        .single();
+
+      if (spotter) {
+        identities.push({ id: spotter.id, type: 'spotter' });
+      }
+
+      // Check artist
+      const { data: artist } = await supabase
+        .from('artists')
+        .select('artist_id')
+        .eq('spotter_id', userId)
+        .single();
+
+      if (artist) {
+        identities.push({ id: artist.artist_id, type: 'artist' });
+      }
+
+      // Check venue
+      const { data: venue } = await supabase
+        .from('venues')
+        .select('venue_id')
+        .eq('spotter_id', userId)
+        .single();
+
+      if (venue) {
+        identities.push({ id: venue.venue_id, type: 'venue' });
+      }
+
+      return { 
+        success: true, 
+        data: identities 
+      };
+    } catch (error) {
+      console.error('Error getting user identities:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error occurred'
+      };
+    }
+  }
+
+  // Get conversations for all user's entity types
+  async getAllUserConversations(
+    userId: string,
+    limit: number = 50
+  ): Promise<ServiceResponse<{ spotter: Conversation[], artist: Conversation[], venue: Conversation[] }>> {
+    try {
+      const result = { spotter: [] as Conversation[], artist: [] as Conversation[], venue: [] as Conversation[] };
+      
+      // Get user identities
+      const identitiesResult = await this.getUserIdentities(userId);
+      if (!identitiesResult.success || !identitiesResult.data) {
+        return { success: false, error: 'Failed to get user identities' };
+      }
+
+      // Get conversations for each identity
+      for (const identity of identitiesResult.data) {
+        const convResult = await this.getEntityConversations(identity.id, identity.type, limit);
+        if (convResult.success && convResult.data) {
+          result[identity.type] = convResult.data;
+        }
+      }
+
+      return { success: true, data: result };
+    } catch (error) {
+      console.error('Error getting all user conversations:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error occurred'
+      };
+    }
+  }
+
+  // Send a message - Always converts to spotter-to-spotter messaging
   async sendMessage(
     senderId: string,
     senderType: EntityType,
@@ -125,15 +180,62 @@ class MessagingService {
         return { success: false, error: 'Message is too long (max 5000 characters)' };
       }
 
+      // Convert both sender and recipient to their spotter IDs
+      let actualSenderId = senderId;
+      let actualRecipientId = recipientId;
+
+      // Get sender spotter ID
+      if (senderType === 'artist') {
+        const { data: artist } = await supabase
+          .from('artists')
+          .select('spotter_id')
+          .eq('artist_id', senderId)
+          .single();
+        if (artist) actualSenderId = artist.spotter_id;
+      } else if (senderType === 'venue') {
+        const { data: venue } = await supabase
+          .from('venues')
+          .select('spotter_id')
+          .eq('venue_id', senderId)
+          .single();
+        if (venue) actualSenderId = venue.spotter_id;
+      }
+
+      // Get recipient spotter ID
+      if (recipientType === 'artist') {
+        const { data: artist } = await supabase
+          .from('artists')
+          .select('spotter_id')
+          .eq('artist_id', recipientId)
+          .single();
+        if (artist) actualRecipientId = artist.spotter_id;
+      } else if (recipientType === 'venue') {
+        const { data: venue } = await supabase
+          .from('venues')
+          .select('spotter_id')
+          .eq('venue_id', recipientId)
+          .single();
+        if (venue) actualRecipientId = venue.spotter_id;
+      }
+
+      // Send message directly to messages table (spotter to spotter)
       const { data, error } = await supabase
-        .rpc('send_message', {
-          sender_id_param: senderId,
-          sender_type_param: senderType,
-          recipient_id_param: recipientId,
-          recipient_type_param: recipientType,
-          message_content_param: messageContent.trim(),
-          message_type_param: messageType
-        });
+        .from('messages')
+        .insert({
+          sender_id: actualSenderId,
+          sender_type: 'spotter',
+          recipient_id: actualRecipientId,
+          recipient_type: 'spotter',
+          message_content: messageContent.trim(),
+          message_type: messageType,
+          // Save original intent for data preservation
+          intended_sender_id: senderId,
+          intended_sender_type: senderType,
+          intended_recipient_id: recipientId,
+          intended_recipient_type: recipientType
+        })
+        .select('message_id')
+        .single();
 
       if (error) {
         throw new Error(`Failed to send message: ${error.message}`);
@@ -141,7 +243,7 @@ class MessagingService {
 
       return {
         success: true,
-        data: { messageId: data }
+        data: { messageId: data.message_id }
       };
     } catch (error) {
       console.error('Error sending message:', error);
@@ -240,6 +342,7 @@ class MessagingService {
     }
   }
 
+
   // Mark messages as read
   async markMessagesAsRead(
     readerId: string,
@@ -250,10 +353,10 @@ class MessagingService {
     try {
       const { data, error } = await supabase
         .rpc('mark_messages_as_read', {
-          reader_id: readerId,
-          reader_type: readerType,
-          sender_id: senderId,
-          sender_type: senderType
+          reader_id_param: readerId,
+          reader_type_param: readerType,
+          sender_id_param: senderId,
+          sender_type_param: senderType
         });
 
       if (error) {

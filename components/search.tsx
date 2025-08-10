@@ -40,7 +40,6 @@ const Search = () => {
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [loading, setLoading] = useState(false);
   const [activeFilter, setActiveFilter] = useState<'all' | 'artist' | 'band' | 'venue'>('all');
-  const [recentSearches, setRecentSearches] = useState<string[]>([]);
   
   // Animation refs
   const fadeAnim = useRef(new Animated.Value(0)).current;
@@ -54,8 +53,6 @@ const Search = () => {
       useNativeDriver: true,
     }).start();
     
-    // Load recent searches (could be from AsyncStorage in production)
-    setRecentSearches(['Radiohead', 'The Fillmore', 'Arctic Monkeys']);
     
     // Test database connection
     testDatabaseConnection();
@@ -196,12 +193,6 @@ const Search = () => {
   };
 
   const handleResultPress = (result: SearchResult) => {
-    // Add to recent searches
-    setRecentSearches(prev => [
-      result.name,
-      ...prev.filter(item => item !== result.name)
-    ].slice(0, 5));
-
     // Navigate to appropriate profile
     switch (result.type) {
       case 'artist':
@@ -216,10 +207,6 @@ const Search = () => {
     }
   };
 
-  const handleRecentSearchPress = (query: string) => {
-    setSearchQuery(query);
-    searchRef.current?.focus();
-  };
 
   const clearSearch = () => {
     setSearchQuery("");
@@ -389,24 +376,7 @@ const Search = () => {
               </View>
             )
           ) : (
-            <View style={styles.recentSearchesContainer}>
-              {recentSearches.length > 0 && (
-                <>
-                  <Text style={styles.sectionTitle}>Recent Searches</Text>
-                  {recentSearches.map((search, index) => (
-                    <TouchableOpacity
-                      key={index}
-                      style={styles.recentSearchItem}
-                      onPress={() => handleRecentSearchPress(search)}
-                    >
-                      <Text style={styles.recentSearchIcon}>🕒</Text>
-                      <Text style={styles.recentSearchText}>{search}</Text>
-                    </TouchableOpacity>
-                  ))}
-                </>
-              )}
-              
-              <View style={styles.tipsContainer}>
+            <View style={styles.tipsContainer}>
                 <Text style={styles.sectionTitle}>Search Tips</Text>
                 <View style={styles.tipItem}>
                   <Text style={styles.tipEmoji}>🎤</Text>
@@ -421,7 +391,6 @@ const Search = () => {
                   <Text style={styles.tipText}>Discover venues hosting live music events</Text>
                 </View>
               </View>
-            </View>
           )}
         </ScrollView>
       </KeyboardAvoidingView>
@@ -634,33 +603,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 40,
     fontFamily: 'Amiko-Regular',
   },
-  recentSearchesContainer: {
-    paddingBottom: 100,
-  },
-  recentSearchItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#fff',
-    padding: 15,
-    marginBottom: 8,
-    borderRadius: 10,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 2,
-    elevation: 1,
-  },
-  recentSearchIcon: {
-    fontSize: 18,
-    marginRight: 15,
-  },
-  recentSearchText: {
-    fontSize: 16,
-    color: '#333',
-    fontFamily: 'Amiko-Regular',
-  },
   tipsContainer: {
     marginTop: 20,
+    paddingBottom: 100,
   },
   tipItem: {
     flexDirection: 'row',

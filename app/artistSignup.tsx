@@ -69,6 +69,16 @@ const ArtistSignup = () => {
 
   return (
     <SafeAreaView style={styles.container}>
+      {/* Back Button Header */}
+      <View style={styles.header}>
+        <TouchableOpacity 
+          style={styles.backButton}
+          onPress={() => navigation.goBack()}
+        >
+          <Text style={styles.backButtonText}>← Back</Text>
+        </TouchableOpacity>
+      </View>
+      
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         style={{ flex: 1 }}
@@ -110,6 +120,24 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#fff',
     paddingHorizontal: 20,
+  },
+  header: {
+    paddingTop: 20,
+    paddingBottom: 10,
+    paddingHorizontal: 0,
+  },
+  backButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 12,
+    borderRadius: 8,
+    backgroundColor: 'rgba(42, 40, 130, 0.1)',
+    alignSelf: 'flex-start',
+  },
+  backButtonText: {
+    fontSize: 16,
+    color: '#2a2882',
+    fontWeight: '600',
   },
   inner: {
     flexGrow: 1,

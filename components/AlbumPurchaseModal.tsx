@@ -196,6 +196,8 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0, 0, 0, 0.9)',
     justifyContent: 'center',
     alignItems: 'center',
+    zIndex: 9999,
+    elevation: 9999,
   },
   modalContent: {
     backgroundColor: '#1a1a1f',
@@ -203,6 +205,8 @@ const styles = StyleSheet.create({
     width: SCREEN_WIDTH * 0.9,
     maxHeight: '85%',
     overflow: 'hidden',
+    zIndex: 10000,
+    elevation: 10000,
   },
   albumCoverContainer: {
     position: 'relative',

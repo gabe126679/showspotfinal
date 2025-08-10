@@ -12,8 +12,8 @@ import {
   ActivityIndicator,
   Modal,
   RefreshControl,
+  StatusBar,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useNavigation } from '@react-navigation/native';
 import { supabase } from '../lib/supabase';
@@ -36,7 +36,7 @@ const MessagesPage: React.FC = () => {
   } | null>(null);
   
   // Data states
-  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [allConversations, setAllConversations] = useState<{ spotter: Conversation[], artist: Conversation[], venue: Conversation[] }>({ spotter: [], artist: [], venue: [] });
   const [messages, setMessages] = useState<Message[]>([]);
   const [searchResults, setSearchResults] = useState<SearchableEntity[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
@@ -65,7 +65,7 @@ const MessagesPage: React.FC = () => {
 
   useEffect(() => {
     if (currentEntity) {
-      loadConversations();
+      loadAllConversations();
       loadUnreadCount();
       subscribeToNewMessages();
     }
@@ -97,18 +97,19 @@ const MessagesPage: React.FC = () => {
     }
   };
 
-  const loadConversations = async () => {
+
+  const loadAllConversations = async () => {
     if (!currentEntity) return;
     
     try {
       setLoading(true);
-      const result = await messagingService.getEntityConversations(
-        currentEntity.id,
-        currentEntity.type
-      );
+      const { data: sessionData } = await supabase.auth.getSession();
+      if (!sessionData?.session?.user) return;
+      
+      const result = await messagingService.getAllUserConversations(sessionData.session.user.id);
       
       if (result.success && result.data) {
-        setConversations(result.data);
+        setAllConversations(result.data);
       }
     } catch (error) {
       console.error('Error loading conversations:', error);
@@ -172,14 +173,19 @@ const MessagesPage: React.FC = () => {
       // Update local unread count
       loadUnreadCount();
       
-      // Update conversation list
-      setConversations(prevConversations =>
-        prevConversations.map(conv =>
-          conv.otherEntityId === selectedConversation.entityId
-            ? { ...conv, unreadCount: 0 }
-            : conv
-        )
-      );
+      // Update conversation list for all tabs
+      setAllConversations(prevConversations => {
+        const updated = { ...prevConversations };
+        // Update the conversation in the appropriate entity type array
+        for (const entityType of ['spotter', 'artist', 'venue'] as EntityType[]) {
+          updated[entityType] = updated[entityType].map(conv =>
+            conv.otherEntityId === selectedConversation.entityId
+              ? { ...conv, unreadCount: 0 }
+              : conv
+          );
+        }
+        return updated;
+      });
     } catch (error) {
       console.error('Error marking messages as read:', error);
     }
@@ -193,7 +199,7 @@ const MessagesPage: React.FC = () => {
       currentEntity.type,
       (newMessage) => {
         // Update conversations list
-        loadConversations();
+        loadAllConversations();
         
         // If in chat with sender, add message to chat
         if (
@@ -246,7 +252,7 @@ const MessagesPage: React.FC = () => {
         const newMessage: Message = {
           messageId: result.data!.messageId,
           senderId: currentEntity.id,
-          senderType: currentEntity.type,
+          senderType: 'spotter',
           senderName: 'You',
           messageContent: messageText.trim(),
           messageType: 'text',
@@ -259,7 +265,7 @@ const MessagesPage: React.FC = () => {
         messagesListRef.current?.scrollToEnd({ animated: true });
         
         // Update conversations
-        loadConversations();
+        loadAllConversations();
       }
     } catch (error) {
       console.error('Error sending message:', error);
@@ -293,18 +299,53 @@ const MessagesPage: React.FC = () => {
     }
   };
 
-  const startNewConversation = (entity: SearchableEntity) => {
-    setSelectedConversation({
-      entityId: entity.entityId,
-      entityType: entity.entityType,
-      entityName: entity.entityName,
-      entityImage: entity.entityImage
-    });
-    setShowSearchModal(false);
-    setSearchQuery('');
-    setSearchResults([]);
-    setMessages([]);
-    setViewMode('chat');
+  const startNewConversation = async (entity: SearchableEntity) => {
+    try {
+      // Convert artist/venue to their spotter equivalent
+      let spotterId = entity.entityId;
+      let spotterName = entity.entityName;
+      let spotterImage = entity.entityImage;
+
+      if (entity.entityType === 'artist') {
+        const { data: artist } = await supabase
+          .from('artists')
+          .select('spotter_id, spotters!inner(full_name, spotter_profile_picture)')
+          .eq('artist_id', entity.entityId)
+          .single();
+        
+        if (artist && artist.spotters) {
+          spotterId = artist.spotter_id;
+          spotterName = artist.spotters.full_name;
+          spotterImage = artist.spotters.spotter_profile_picture;
+        }
+      } else if (entity.entityType === 'venue') {
+        const { data: venue } = await supabase
+          .from('venues')
+          .select('spotter_id, spotters!inner(full_name, spotter_profile_picture)')
+          .eq('venue_id', entity.entityId)
+          .single();
+        
+        if (venue && venue.spotters) {
+          spotterId = venue.spotter_id;
+          spotterName = venue.spotters.full_name;
+          spotterImage = venue.spotters.spotter_profile_picture;
+        }
+      }
+
+      setSelectedConversation({
+        entityId: spotterId,
+        entityType: 'spotter',
+        entityName: spotterName,
+        entityImage: spotterImage
+      });
+      setShowSearchModal(false);
+      setSearchQuery('');
+      setSearchResults([]);
+      setMessages([]);
+      setViewMode('chat');
+    } catch (error) {
+      console.error('Error starting new conversation:', error);
+    }
   };
 
   const renderConversationItem = ({ item }: { item: Conversation }) => (
@@ -399,7 +440,8 @@ const MessagesPage: React.FC = () => {
 
   if (loading) {
     return (
-      <SafeAreaView style={styles.container}>
+      <View style={styles.container}>
+        <StatusBar barStyle="light-content" backgroundColor="#2a2882" />
         <LinearGradient
           colors={["#2a2882", "#ff00ff"]}
           style={StyleSheet.absoluteFillObject}
@@ -412,12 +454,13 @@ const MessagesPage: React.FC = () => {
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color="#fff" />
         </View>
-      </SafeAreaView>
+      </View>
     );
   }
 
   return (
-    <SafeAreaView style={styles.container}>
+    <View style={styles.container}>
+      <StatusBar barStyle="light-content" backgroundColor="#2a2882" />
       <LinearGradient
         colors={["#2a2882", "#ff00ff"]}
         style={StyleSheet.absoluteFillObject}
@@ -435,8 +478,9 @@ const MessagesPage: React.FC = () => {
             }}
           />
           
+          
           <View style={styles.conversationsList}>
-            {conversations.length === 0 ? (
+            {allConversations.spotter.length === 0 ? (
               <View style={styles.emptyState}>
                 <Text style={styles.emptyStateText}>No conversations yet</Text>
                 <TouchableOpacity
@@ -450,7 +494,7 @@ const MessagesPage: React.FC = () => {
               </View>
             ) : (
               <FlatList
-                data={conversations}
+                data={allConversations.spotter}
                 renderItem={renderConversationItem}
                 keyExtractor={(item) => item.conversationId}
                 refreshControl={
@@ -458,7 +502,7 @@ const MessagesPage: React.FC = () => {
                     refreshing={refreshing}
                     onRefresh={() => {
                       setRefreshing(true);
-                      loadConversations();
+                      loadAllConversations();
                     }}
                     tintColor="#fff"
                   />
@@ -466,6 +510,15 @@ const MessagesPage: React.FC = () => {
               />
             )}
           </View>
+          
+          {/* Floating New Conversation Button */}
+          <TouchableOpacity
+            style={styles.floatingNewConversationButton}
+            onPress={() => setShowSearchModal(true)}
+          >
+            <Text style={styles.floatingButtonIcon}>+</Text>
+            <Text style={styles.floatingButtonText}>New Chat</Text>
+          </TouchableOpacity>
         </>
       ) : (
         <>
@@ -539,6 +592,7 @@ const MessagesPage: React.FC = () => {
               </TouchableOpacity>
             </View>
             
+            
             <TextInput
               style={styles.searchInput}
               value={searchQuery}
@@ -557,7 +611,7 @@ const MessagesPage: React.FC = () => {
           </View>
         </View>
       </Modal>
-    </SafeAreaView>
+    </View>
   );
 };
 
@@ -797,6 +851,110 @@ const styles = StyleSheet.create({
   searchResultType: {
     fontSize: 14,
     color: '#666',
+  },
+  tabContainer: {
+    flexDirection: 'row',
+    backgroundColor: '#fff',
+    borderBottomWidth: 1,
+    borderBottomColor: '#e0e0e0',
+  },
+  tab: {
+    flex: 1,
+    paddingVertical: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
+  },
+  activeTab: {
+    borderBottomWidth: 2,
+    borderBottomColor: '#ff00ff',
+  },
+  tabText: {
+    fontSize: 14,
+    color: '#666',
+  },
+  activeTabText: {
+    color: '#ff00ff',
+    fontWeight: '600',
+  },
+  tabBadge: {
+    position: 'absolute',
+    top: 5,
+    right: 20,
+    backgroundColor: '#ff00ff',
+    borderRadius: 10,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    minWidth: 20,
+    alignItems: 'center',
+  },
+  tabBadgeText: {
+    color: '#fff',
+    fontSize: 10,
+    fontWeight: '600',
+  },
+  senderIdentityContainer: {
+    padding: 15,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f0f0f0',
+  },
+  senderIdentityLabel: {
+    fontSize: 14,
+    color: '#666',
+    marginBottom: 10,
+  },
+  senderIdentityButtons: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  senderIdentityButton: {
+    paddingHorizontal: 15,
+    paddingVertical: 8,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: '#e0e0e0',
+    backgroundColor: '#fff',
+  },
+  selectedSenderIdentity: {
+    backgroundColor: '#ff00ff',
+    borderColor: '#ff00ff',
+  },
+  senderIdentityButtonText: {
+    fontSize: 14,
+    color: '#666',
+  },
+  selectedSenderIdentityText: {
+    color: '#fff',
+  },
+  floatingNewConversationButton: {
+    position: 'absolute',
+    bottom: 20,
+    right: 20,
+    backgroundColor: '#ff00ff',
+    borderRadius: 30,
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
+    elevation: 5,
+  },
+  floatingButtonIcon: {
+    color: '#fff',
+    fontSize: 20,
+    fontWeight: 'bold',
+    marginRight: 8,
+  },
+  floatingButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
   },
 });
 

@@ -11,7 +11,13 @@
       "Bash(grep:*)",
       "Bash(npm run build:*)",
       "Bash(npm run:*)",
-      "Bash(npx tsc:*)"
+      "Bash(npx tsc:*)",
+      "Bash(npx supabase:*)",
+      "Bash(npm start)",
+      "Bash(find:*)",
+      "Bash(psql:*)",
+      "Bash(node:*)",
+      "WebFetch(domain:www.interaction-design.org)"
     ],
     "deny": []
   }

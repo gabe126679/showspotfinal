@@ -58,7 +58,7 @@ const ArtistSignup = () => {
 
       if (updateError) throw updateError;
 
-      navigation.navigate('ArtistPicture', { artist_id: artistID });
+      (navigation as any).navigate('ArtistPicture', { artist_id: artistID });
     } catch (err) {
       console.error('Artist Signup Error:', err);
       Alert.alert('Error', 'Could not create artist profile');

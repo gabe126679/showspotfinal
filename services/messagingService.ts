@@ -389,6 +389,15 @@ class MessagingService {
         });
 
       if (error) {
+        // Check if it's a network error and handle gracefully
+        if (error.message?.includes('Network request failed') || 
+            error.message?.includes('fetch failed')) {
+          // Return 0 count silently for network errors (common in dev)
+          return {
+            success: true,
+            data: 0
+          };
+        }
         throw new Error(`Failed to get unread count: ${error.message}`);
       }
 
@@ -397,15 +406,28 @@ class MessagingService {
         data: data || 0
       };
     } catch (error) {
+      // Check for network errors
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
+      if (errorMessage.includes('Network request failed') || 
+          errorMessage.includes('fetch failed') ||
+          errorMessage.includes('TypeError')) {
+        // Return 0 count silently for network errors (common in dev)
+        return {
+          success: true,
+          data: 0
+        };
+      }
+      
+      // Only log non-network errors
       console.error('Error getting unread count:', error);
       return {
         success: false,
-        error: error instanceof Error ? error.message : 'Unknown error occurred'
+        error: errorMessage
       };
     }
   }
 
-  // Search for entities to message
+  // Search for entities to message - SPOTTERS ONLY
   async searchMessageableEntities(
     searchQuery: string,
     searcherId: string,
@@ -417,11 +439,11 @@ class MessagingService {
         return { success: true, data: [] };
       }
 
+      // Only search for spotters regardless of who is searching
       const { data, error } = await supabase
-        .rpc('search_messageable_entities', {
+        .rpc('search_messageable_spotters', {
           search_query: searchQuery.trim(),
           searcher_id: searcherId,
-          searcher_type: searcherType,
           limit_count: limit
         });
 

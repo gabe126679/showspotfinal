@@ -178,6 +178,7 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
   
   // Spotter data
   const [spotterName, setSpotterName] = useState("");
+  const [spotterEmail, setSpotterEmail] = useState("");
   const [spotterProfileImage, setSpotterProfileImage] = useState<string | null>(null);
   const [spotterTabs, setSpotterTabs] = useState<TabData[]>(SPOTTER_TABS);
   const [isArtist, setIsArtist] = useState(false);
@@ -321,7 +322,11 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
         if (sessionError) throw sessionError;
 
         const userId = sessionData.session?.user?.id;
+        const userEmail = sessionData.session?.user?.email || '';
         if (!userId) throw new Error("No authenticated user");
+
+        // Set user email for spotter info
+        setSpotterEmail(userEmail);
 
         // Fetch spotter data
         const { data: spotterData, error: spotterError } = await supabase
@@ -1291,12 +1296,26 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
             </View>
           </PanGestureHandler>
         ) : (
-          <LinearGradient
-            colors={["#ff00ff20", "#2a288220"]}
-            style={styles.imagePlaceholder}
+          <TouchableOpacity 
+            onPress={() => {
+              if (activeProfile === 'spotter') {
+                navigation.navigate('Picture' as never);
+              } else if (activeProfile === 'artist') {
+                navigation.navigate('ArtistPicture' as never);
+              } else if (activeProfile === 'venue') {
+                navigation.navigate('VenuePicture' as never);
+              }
+            }}
+            style={styles.imagePlaceholderTouchable}
           >
-            <Text style={styles.placeholderText}>No Image</Text>
-          </LinearGradient>
+            <LinearGradient
+              colors={["#ff00ff20", "#2a288220"]}
+              style={styles.imagePlaceholder}
+            >
+              <Text style={styles.placeholderText}>No Image</Text>
+              <Text style={styles.placeholderSubtext}>Tap to upload</Text>
+            </LinearGradient>
+          </TouchableOpacity>
         )}
         
         {/* Name and Rating Overlay */}
@@ -1541,6 +1560,10 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
                               song_status: 'active',
                               song_approved: true,
                               song_type: purchase.song_type,
+                              band_id: purchase.song_band,
+                              // Add pre-fetched names for the player to use
+                              artist_name: purchase.artist_name,
+                              band_name: purchase.band_name,
                             };
                             
                             // Convert all purchased songs to the song format for playlist
@@ -1560,6 +1583,8 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
                             
                             playSong(songData, playlist);
                             console.log('Playing purchased song:', purchase.song_title);
+                            // Navigate to the Player tab
+                            navigation.navigate("Player" as never);
                           }}
                         >
                           <Image 
@@ -1799,6 +1824,8 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
                                         band_id: s.song_band,
                                       }));
                                       playSong(songToPlay, albumSongs);
+                                      // Navigate to the Player tab
+                                      navigation.navigate("Player" as never);
                                     }}
                                   >
                                     <Text style={styles.albumSongNumber}>{index + 1}</Text>
@@ -1910,6 +1937,8 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
                                         band_id: s.song_band,
                                       }));
                                       playSong(songToPlay, playlistSongs);
+                                      // Navigate to the Player tab
+                                      navigation.navigate("Player" as never);
                                     }}
                                   >
                                     <Text style={styles.playlistSongNumber}>{index + 1}</Text>
@@ -2029,6 +2058,8 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
                                         band_id: s.song_band,
                                       }));
                                       playSong(songToPlay, albumSongs);
+                                      // Navigate to the Player tab
+                                      navigation.navigate("Player" as never);
                                     }}
                                   >
                                     <Text style={styles.albumSongNumber}>{index + 1}</Text>
@@ -2102,13 +2133,19 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
                       ) : (
                         <>
                           <View style={styles.infoRow}>
-                            <Text style={styles.infoLabel}>Name:</Text>
+                            <Text style={styles.infoLabel}>Full Name:</Text>
                             <Text style={styles.infoValue}>{spotterName || 'N/A'}</Text>
                           </View>
                           <View style={styles.infoRow}>
-                            <Text style={styles.infoLabel}>Location:</Text>
-                            <Text style={styles.infoValue}>{spotterLocation || 'Not specified'}</Text>
+                            <Text style={styles.infoLabel}>Email:</Text>
+                            <Text style={styles.infoValue}>{spotterEmail || 'Not specified'}</Text>
                           </View>
+                          <TouchableOpacity 
+                            style={styles.editPhotosButton}
+                            onPress={handleEditImages}
+                          >
+                            <Text style={styles.editPhotosButtonText}>Edit Photos</Text>
+                          </TouchableOpacity>
                         </>
                       )}
                     </View>
@@ -2545,6 +2582,10 @@ const styles = StyleSheet.create({
     width: SCREEN_WIDTH, // Must match screen width for proper ScrollView pagination
     height: IMAGE_SECTION_HEIGHT,
   },
+  imagePlaceholderTouchable: {
+    width: "100%",
+    height: "100%",
+  },
   imagePlaceholder: {
     width: "100%",
     height: "100%",
@@ -2555,6 +2596,13 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontFamily: "Amiko-Regular",
     color: "#999",
+    marginBottom: 5,
+  },
+  placeholderSubtext: {
+    fontSize: 14,
+    fontFamily: "Amiko-Regular",
+    color: "#ff00ff",
+    fontWeight: "600",
   },
   nameOverlay: {
     position: "absolute",
@@ -3477,6 +3525,20 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontStyle: 'italic',
     paddingVertical: 20,
+  },
+  editPhotosButton: {
+    backgroundColor: '#ff00ff',
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderRadius: 25,
+    marginTop: 15,
+    alignSelf: 'center',
+  },
+  editPhotosButtonText: {
+    color: '#ffffff',
+    fontSize: 14,
+    fontWeight: 'bold',
+    textAlign: 'center',
   },
 });
 

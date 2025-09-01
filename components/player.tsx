@@ -33,6 +33,9 @@ interface Song {
   created_at: string;
   song_type?: 'artist' | 'band';
   band_id?: string;
+  // Optional pre-fetched names to avoid database lookups
+  artist_name?: string;
+  band_name?: string;
 }
 
 
@@ -357,6 +360,16 @@ const Player = () => {
     const fetchArtistName = async () => {
       if (currentSong?.artist_id) {
         try {
+          // First check if names are already available in the song object (pre-fetched)
+          if (currentSong.artist_name || currentSong.band_name) {
+            const displayName = currentSong.song_type === 'band' 
+              ? (currentSong.band_name || currentSong.artist_name || 'Unknown Band')
+              : (currentSong.artist_name || currentSong.band_name || 'Unknown Artist');
+            setArtistName(displayName);
+            return;
+          }
+
+          // Fallback to database lookup if names aren't pre-fetched
           // Check if this is a band song
           if (currentSong.song_type === 'band' && currentSong.band_id) {
             // Fetch band name for band songs
@@ -364,20 +377,28 @@ const Player = () => {
               .from('bands')
               .select('band_name')
               .eq('band_id', currentSong.band_id)
-              .single();
+              .maybeSingle();
 
-            if (error) throw error;
-            setArtistName(data?.band_name || 'Unknown Band');
+            if (error) {
+              console.error('Error fetching band:', error);
+              setArtistName('Unknown Band');
+            } else {
+              setArtistName(data?.band_name || 'Unknown Band');
+            }
           } else {
             // Fetch artist name for individual artist songs
             const { data, error } = await supabase
               .from('artists')
               .select('artist_name')
               .eq('artist_id', currentSong.artist_id)
-              .single();
+              .maybeSingle();
 
-            if (error) throw error;
-            setArtistName(data?.artist_name || 'Unknown Artist');
+            if (error) {
+              console.error('Error fetching artist:', error);
+              setArtistName('Unknown Artist');
+            } else {
+              setArtistName(data?.artist_name || 'Unknown Artist');
+            }
           }
         } catch (error) {
           console.error('Error fetching artist/band name:', error);
@@ -387,7 +408,7 @@ const Player = () => {
     };
 
     fetchArtistName();
-  }, [currentSong?.artist_id, currentSong?.song_type, currentSong?.band_id]);
+  }, [currentSong?.artist_id, currentSong?.song_type, currentSong?.band_id, currentSong?.artist_name, currentSong?.band_name]);
 
   // Update progress animation
   useEffect(() => {

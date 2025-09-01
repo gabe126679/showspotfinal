@@ -38,7 +38,7 @@ export default function BandPicture({ route, navigation }) {
       }
 
       const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.images,
+        mediaTypes: 'images' as any, // TypeScript expects 'Images' but runtime needs 'images'
         allowsEditing: true,
         aspect: [1, 1], // Square aspect ratio
         quality: 0.8, // Reduced quality for smaller file sizes

@@ -33,7 +33,7 @@ import RatingModal from "./RatingModal";
 import { ratingService, RatingInfo } from '../services/ratingService';
 import { followerService, FollowerInfo } from '../services/followerService';
 import TipModal from "./TipModal";
-import BetaDisclaimer from "./BetaDisclaimer";
+import PaymentDisclaimer from "./PaymentDisclaimer";
 import AlbumCreationModal from "./AlbumCreationModal";
 import AlbumImageUploadModal from "./AlbumImageUploadModal";
 import { albumService, Album } from '../services/albumService';
@@ -142,7 +142,7 @@ const BandPublicProfile: React.FC<BandPublicProfileProps> = ({ route }) => {
   
   // Tip states
   const [showTipModal, setShowTipModal] = useState(false);
-  const [showBetaDisclaimer, setShowBetaDisclaimer] = useState(false);
+  const [showPaymentDisclaimer, setShowPaymentDisclaimer] = useState(false);
   const [pendingAction, setPendingAction] = useState<{type: string, data?: any} | null>(null);
   
   // Common states - matching profile.tsx exactly
@@ -225,14 +225,14 @@ const BandPublicProfile: React.FC<BandPublicProfileProps> = ({ route }) => {
     setShowAlbumModal(true);
   };
 
-  // Beta disclaimer handlers
-  const handleBetaAction = (actionType: string, actionData?: any) => {
+  // Payment disclaimer handlers
+  const handlePaymentAction = (actionType: string, actionData?: any) => {
     setPendingAction({ type: actionType, data: actionData });
-    setShowBetaDisclaimer(true);
+    setShowPaymentDisclaimer(true);
   };
 
-  const handleBetaProceed = () => {
-    setShowBetaDisclaimer(false);
+  const handlePaymentProceed = () => {
+    setShowPaymentDisclaimer(false);
     
     if (pendingAction) {
       switch (pendingAction.type) {
@@ -250,8 +250,8 @@ const BandPublicProfile: React.FC<BandPublicProfileProps> = ({ route }) => {
     }
   };
 
-  const handleBetaCancel = () => {
-    setShowBetaDisclaimer(false);
+  const handlePaymentCancel = () => {
+    setShowPaymentDisclaimer(false);
     setPendingAction(null);
   };
   
@@ -803,7 +803,7 @@ const BandPublicProfile: React.FC<BandPublicProfileProps> = ({ route }) => {
           {song.song_status === 'active' && (
             <TouchableOpacity
               style={styles.songPurchaseButton}
-              onPress={() => handleBetaAction('song', song)}
+              onPress={() => handlePaymentAction('song', song)}
             >
               <Text style={styles.songPurchaseButtonText}>+</Text>
             </TouchableOpacity>
@@ -1161,7 +1161,7 @@ const BandPublicProfile: React.FC<BandPublicProfileProps> = ({ route }) => {
                             style={styles.albumPurchaseButton}
                             onPress={(e) => {
                               e.stopPropagation();
-                              handleBetaAction('album', album);
+                              handlePaymentAction('album', album);
                             }}
                           >
                             <Text style={styles.albumPurchaseButtonText}>Buy</Text>
@@ -1480,7 +1480,7 @@ const BandPublicProfile: React.FC<BandPublicProfileProps> = ({ route }) => {
           {!isOwner && (
             <TouchableOpacity 
               style={styles.instagramActionButton} 
-              onPress={() => handleBetaAction('tip')}
+              onPress={() => handlePaymentAction('tip')}
               activeOpacity={0.7}
             >
               <View style={styles.instagramButtonInner}>
@@ -1713,10 +1713,10 @@ const BandPublicProfile: React.FC<BandPublicProfileProps> = ({ route }) => {
         recipientName={bandData?.band_name || 'Band'}
       />
 
-      <BetaDisclaimer
-        visible={showBetaDisclaimer}
-        onClose={handleBetaCancel}
-        onProceed={handleBetaProceed}
+      <PaymentDisclaimer
+        visible={showPaymentDisclaimer}
+        onClose={handlePaymentCancel}
+        onProceed={handlePaymentProceed}
         action={
           pendingAction?.type === 'tip' ? 'tip' :
           pendingAction?.type === 'song' ? 'purchase the song' :

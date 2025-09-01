@@ -49,7 +49,7 @@ const AlbumImageUploadModal: React.FC<AlbumImageUploadModalProps> = ({
 
       // Launch image picker
       const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.images,
+        mediaTypes: 'images' as any, // TypeScript expects 'Images' but runtime needs 'images'
         allowsEditing: true,
         aspect: [1, 1],
         quality: 0.8,

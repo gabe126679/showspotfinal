@@ -56,7 +56,7 @@ export default function Success({ route, navigation }: Props) {
 
   return (
     <SafeAreaView style={styles.container}>
-      <Text style={styles.title}>Welcome, {route.params.name}!</Text>
+      <Text style={styles.title}>Welcome, {route.params?.name || 'User'}!</Text>
 
       {loading ? (
         <ActivityIndicator size="large" />

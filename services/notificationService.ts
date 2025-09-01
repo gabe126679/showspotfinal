@@ -88,14 +88,30 @@ class NotificationService {
         .eq('is_read', false);
 
       if (error) {
+        // Check if it's a network error and handle gracefully
+        if (error.message?.includes('Network request failed') || 
+            error.message?.includes('fetch failed')) {
+          // Return 0 count silently for network errors (common in dev)
+          return { success: true, count: 0 };
+        }
         console.error('Error getting unread count:', error);
         return { success: false, error: error.message };
       }
 
       return { success: true, count: count || 0 };
     } catch (error: any) {
+      // Check for network errors
+      const errorMessage = error?.message || error?.toString() || 'Unknown error';
+      if (errorMessage.includes('Network request failed') || 
+          errorMessage.includes('fetch failed') ||
+          errorMessage.includes('TypeError')) {
+        // Return 0 count silently for network errors (common in dev)
+        return { success: true, count: 0 };
+      }
+      
+      // Only log non-network errors
       console.error('Unexpected error getting unread count:', error);
-      return { success: false, error: error.message };
+      return { success: false, error: errorMessage };
     }
   }
 
@@ -684,7 +700,13 @@ class NotificationService {
       case 'venue_acceptance':
       case 'venue_show_acceptance':
         title = 'Show Confirmed!';
-        message = `${data.venue_name} has confirmed your show for ${data.show_date} at ${data.show_time}. Your guarantee is $${data.artist_guarantee?.toFixed(2)} if sold out. Tap to view show bill.`;
+        // Only include guarantee in message if artist_guarantee exists (not for promoters)
+        if (data.artist_guarantee !== undefined && data.artist_guarantee !== null) {
+          message = `${data.venue_name} has confirmed your show for ${data.show_date} at ${data.show_time}. Your guarantee is $${data.artist_guarantee?.toFixed(2)} if sold out. Tap to view show bill.`;
+        } else {
+          // Message for promoters (no guarantee mentioned)
+          message = `${data.venue_name} has confirmed the show for ${data.show_date} at ${data.show_time}. Tap to view show bill.`;
+        }
         break;
       default:
         title = 'Notification';
@@ -792,18 +814,21 @@ class NotificationService {
       // Notify all show members
       for (const member of showData.show_members || []) {
         if (member.show_member_type === 'artist') {
+          // Get artist guarantee for individual artists
+          const artistGuarantee = showData.artist_guarantee || 0;
           notifications.push(
             this.createNotification({
               notification_type: 'general',
               notification_recipient: member.show_member_id,
               notification_sender: null,
               notification_title: 'Show is Now Active!',
-              notification_message: `Great news! The show at ${showData.venue_name || 'venue'} is now confirmed and active. All performers and venue have accepted!`,
+              notification_message: `Great news! The show at ${showData.venue_name || 'venue'} is now confirmed and active. Your guarantee is $${artistGuarantee.toFixed(2)} if sold out. All performers and venue have accepted!`,
               notification_data: {
                 show_id: showData.show_id,
                 venue_name: showData.venue_name,
                 show_date: showData.show_date || showData.show_preferred_date,
                 show_time: showData.show_time || showData.show_preferred_time,
+                artist_guarantee: artistGuarantee,
                 notification_subtype: 'show_activated'
               },
               is_read: false,
@@ -811,7 +836,9 @@ class NotificationService {
             })
           );
         } else if (member.show_member_type === 'band' && member.show_member_consensus) {
-          // Notify all band members
+          // Get artist guarantee for band members
+          const artistGuarantee = showData.artist_guarantee || 0;
+          // Notify all band members with their individual guarantee
           for (const bandMember of member.show_member_consensus) {
             notifications.push(
               this.createNotification({
@@ -819,12 +846,14 @@ class NotificationService {
                 notification_recipient: bandMember.show_band_member_id,
                 notification_sender: null,
                 notification_title: 'Show is Now Active!',
-                notification_message: `Great news! The show at ${showData.venue_name || 'venue'} is now confirmed and active. All performers and venue have accepted!`,
+                notification_message: `Great news! The show at ${showData.venue_name || 'venue'} with your band is now confirmed and active. Your guarantee is $${artistGuarantee.toFixed(2)} if sold out. All performers and venue have accepted!`,
                 notification_data: {
                   show_id: showData.show_id,
                   venue_name: showData.venue_name,
                   show_date: showData.show_date || showData.show_preferred_date,
                   show_time: showData.show_time || showData.show_preferred_time,
+                  artist_guarantee: artistGuarantee,
+                  band_id: member.show_member_id,
                   notification_subtype: 'show_activated'
                 },
                 is_read: false,

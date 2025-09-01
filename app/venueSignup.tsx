@@ -7,6 +7,8 @@ import {
   StyleSheet,
   Alert,
   ScrollView,
+  KeyboardAvoidingView,
+  Platform,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -130,7 +132,7 @@ const VenueSignup = () => {
 
       if (updateError) throw updateError;
 
-      navigation.navigate('VenuePicture', { venue_id: venueID });
+      (navigation as any).navigate('VenuePicture', { venue_id: venueID });
     } catch (err) {
       console.error('Venue Signup Error:', err);
       Alert.alert('Error', 'Could not create venue profile.');
@@ -141,17 +143,22 @@ const VenueSignup = () => {
 
   return (
     <SafeAreaView style={styles.container}>
-      {/* Back Button Header */}
-      <View style={styles.header}>
-        <TouchableOpacity 
-          style={styles.backButton}
-          onPress={() => navigation.goBack()}
-        >
-          <Text style={styles.backButtonText}>← Back</Text>
-        </TouchableOpacity>
-      </View>
-      
-      <ScrollView contentContainerStyle={styles.inner} keyboardShouldPersistTaps="handled">
+      <KeyboardAvoidingView 
+        style={styles.keyboardAvoidingView}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
+      >
+        {/* Back Button Header */}
+        <View style={styles.header}>
+          <TouchableOpacity 
+            style={styles.backButton}
+            onPress={() => navigation.goBack()}
+          >
+            <Text style={styles.backButtonText}>← Back</Text>
+          </TouchableOpacity>
+        </View>
+        
+        <ScrollView contentContainerStyle={styles.inner} keyboardShouldPersistTaps="handled">
         <Text style={styles.title}>Create Your Venue Profile</Text>
 
         <TextInput
@@ -206,7 +213,8 @@ const VenueSignup = () => {
             {loading ? 'Creating...' : 'Continue'}
           </Text>
         </TouchableOpacity>
-      </ScrollView>
+        </ScrollView>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 };
@@ -216,6 +224,9 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#fff',
     paddingHorizontal: 20,
+  },
+  keyboardAvoidingView: {
+    flex: 1,
   },
   header: {
     paddingTop: 20,

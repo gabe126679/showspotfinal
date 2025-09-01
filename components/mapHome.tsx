@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef } from "react";
 import { StyleSheet, View, Dimensions, Text, TouchableOpacity, StatusBar, ScrollView, Image } from "react-native";
-import MapView, { Marker, PROVIDER_GOOGLE, Callout } from "react-native-maps";
+import MapView, { Marker, Callout } from "react-native-maps";
 import * as Location from "expo-location";
 import { useNavigation } from "@react-navigation/native";
 import { supabase } from "../lib/supabase";
@@ -88,6 +88,30 @@ const MapHome = () => {
       }
     } catch (error) {
       console.error('Error getting current user:', error);
+    }
+  };
+
+  const handleMyLocationPress = async () => {
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        console.log('Location permission denied');
+        return;
+      }
+
+      const location = await Location.getCurrentPositionAsync({});
+      const userLocation = {
+        latitude: location.coords.latitude,
+        longitude: location.coords.longitude,
+        latitudeDelta: 0.05,
+        longitudeDelta: 0.05,
+      };
+
+      if (mapRef.current) {
+        mapRef.current.animateToRegion(userLocation, 1000);
+      }
+    } catch (error) {
+      console.error('Error getting user location:', error);
     }
   };
 
@@ -596,20 +620,18 @@ const MapHome = () => {
       {/* Map is always rendered in the background */}
       {region && (
         <View style={styles.mapWrapper}>
+          {/* Dark blue overlay to enhance the theme */}
+          <View style={styles.mapOverlay} />
           <MapView
               ref={mapRef}
-              provider={PROVIDER_GOOGLE}
               style={styles.map}
               region={region}
               showsUserLocation={true}
-              showsMyLocationButton={true}
-              customMapStyle={aubergineStyle}
-              mapPadding={{
-                top: 0,
-                right: 10,
-                bottom: 10, // Reduced to move My Location button lower
-                left: 0,
-              }}
+              mapType="mutedStandard"
+              userInterfaceStyle="dark"
+              showsPointsOfInterest={false}
+              showsBuildings={false}
+              showsTraffic={false}
               onMapReady={() => {
                 setMapReady(true);
               }}
@@ -660,6 +682,16 @@ const MapHome = () => {
           </View>
       )}
 
+      {/* Custom My Location Button - Only show on V (venues) tab */}
+      {region && activeTab === 'V' && (
+        <TouchableOpacity 
+          style={styles.myLocationButton}
+          onPress={handleMyLocationPress}
+        >
+          <Text style={styles.myLocationIcon}>📍</Text>
+        </TouchableOpacity>
+      )}
+
       {/* Tab content overlays */}
       {activeTab === 'S' ? (
         <ScrollView style={styles.showsFeedContainer}>
@@ -708,20 +740,7 @@ const MapHome = () => {
   );
 };
 
-const aubergineStyle = [
-  { elementType: "geometry", stylers: [{ color: "#1d2c4d" }] },
-  { elementType: "labels.text.fill", stylers: [{ color: "#8ec3b9" }] },
-  { elementType: "labels.text.stroke", stylers: [{ color: "#1a3646" }] },
-  { featureType: "administrative.country", elementType: "geometry.stroke", stylers: [{ color: "#4b6878" }] },
-  { featureType: "administrative.land_parcel", stylers: [{ visibility: "off" }] },
-  { featureType: "poi", stylers: [{ visibility: "off" }] },
-  { featureType: "poi.park", elementType: "geometry.fill", stylers: [{ color: "#023e58" }] },
-  { featureType: "road", elementType: "geometry", stylers: [{ color: "#304a7d" }] },
-  { featureType: "road", elementType: "labels.icon", stylers: [{ visibility: "off" }] },
-  { featureType: "transit", stylers: [{ visibility: "off" }] },
-  { featureType: "water", elementType: "geometry", stylers: [{ color: "#0e1626" }] },
-  { featureType: "water", elementType: "labels.text.fill", stylers: [{ color: "#4e6d70" }] },
-];
+// Apple Maps with ShowSpot dark blue theme
 
 const styles = StyleSheet.create({
   container: {
@@ -736,6 +755,16 @@ const styles = StyleSheet.create({
   mapWrapper: {
     flex: 1,
     position: 'relative',
+  },
+  mapOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(42, 40, 130, 0.12)', // ShowSpot blue with transparency
+    zIndex: 1,
+    pointerEvents: 'none',
   },
   map: {
     width: '100%',
@@ -1201,6 +1230,27 @@ const styles = StyleSheet.create({
   ratingModalCloseText: {
     color: '#666',
     fontWeight: '600',
+  },
+  myLocationButton: {
+    position: 'absolute',
+    bottom: 120,
+    right: 20,
+    width: 50,
+    height: 50,
+    backgroundColor: 'rgba(42, 40, 130, 0.95)',
+    borderRadius: 25,
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
+    elevation: 5,
+    zIndex: 500,
+  },
+  myLocationIcon: {
+    fontSize: 20,
+    color: '#fff',
   },
 });
 

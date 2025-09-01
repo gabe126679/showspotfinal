@@ -11,7 +11,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
-interface BetaDisclaimerProps {
+interface PaymentDisclaimerProps {
   visible: boolean;
   onClose: () => void;
   onProceed: () => void;
@@ -19,7 +19,7 @@ interface BetaDisclaimerProps {
   itemName?: string; // song name, ticket type, etc.
 }
 
-const BetaDisclaimer: React.FC<BetaDisclaimerProps> = ({
+const PaymentDisclaimer: React.FC<PaymentDisclaimerProps> = ({
   visible,
   onClose,
   onProceed,
@@ -39,28 +39,28 @@ const BetaDisclaimer: React.FC<BetaDisclaimerProps> = ({
             colors={['#ff00ff', '#2a2882']}
             style={styles.header}
           >
-            <Text style={styles.headerIcon}>🧪</Text>
-            <Text style={styles.headerTitle}>BETA NOTICE</Text>
+            <Text style={styles.headerIcon}>ℹ️</Text>
+            <Text style={styles.headerTitle}>PAYMENT NOTICE</Text>
           </LinearGradient>
           
           <View style={styles.content}>
             <Text style={styles.title}>
-              This is a demonstration app
+              Payment Processing Information
             </Text>
             
             <Text style={styles.message}>
-              You are about to {action} {itemName ? `"${itemName}"` : ''} in demo mode.
+              You are about to {action} {itemName ? `"${itemName}"` : ''}.
             </Text>
             
             <View style={styles.bulletPoints}>
-              <Text style={styles.bullet}>• No real money will be charged</Text>
-              <Text style={styles.bullet}>• All transactions are simulated</Text>
-              <Text style={styles.bullet}>• This is for testing purposes only</Text>
-              <Text style={styles.bullet}>• All content is AI-generated or public domain</Text>
+              <Text style={styles.bullet}>• Secure payment processing</Text>
+              <Text style={styles.bullet}>• All transactions are protected</Text>
+              <Text style={styles.bullet}>• Your information is encrypted</Text>
+              <Text style={styles.bullet}>• Powered by Stripe</Text>
             </View>
             
             <Text style={styles.footer}>
-              This beta version is for demonstration and investment opportunities.
+              By proceeding, you agree to our terms and conditions.
             </Text>
           </View>
           
@@ -74,7 +74,7 @@ const BetaDisclaimer: React.FC<BetaDisclaimerProps> = ({
                 colors={['#ff00ff', '#2a2882']}
                 style={styles.proceedGradient}
               >
-                <Text style={styles.proceedText}>Proceed with Demo</Text>
+                <Text style={styles.proceedText}>Proceed</Text>
               </LinearGradient>
             </TouchableOpacity>
           </View>
@@ -190,4 +190,4 @@ const styles = StyleSheet.create({
   },
 });
 
-export default BetaDisclaimer;
+export default PaymentDisclaimer;

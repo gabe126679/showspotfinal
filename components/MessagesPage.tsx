@@ -231,46 +231,64 @@ const MessagesPage: React.FC = () => {
   };
 
   const sendMessage = async () => {
-    if (!currentEntity || !selectedConversation || !messageText.trim() || sendingMessage) {
+    if (!currentEntity || !selectedConversation || !messageText.trim()) {
       return;
     }
     
+    // Store message text before clearing
+    const messageToSend = messageText.trim();
+    
+    // Clear input immediately so user can type next message
+    setMessageText('');
+    
+    // Add optimistic message to UI immediately
+    const tempId = `temp-${Date.now()}`;
+    const optimisticMessage: Message = {
+      messageId: tempId,
+      senderId: currentEntity.id,
+      senderType: 'spotter',
+      senderName: 'You',
+      messageContent: messageToSend,
+      messageType: 'text',
+      isRead: true,
+      createdAt: new Date().toISOString(),
+      isOwnMessage: true
+    };
+    
+    setMessages(prev => [...prev, optimisticMessage]);
+    messagesListRef.current?.scrollToEnd({ animated: true });
+    
     try {
-      setSendingMessage(true);
       const result = await messagingService.sendMessage(
         currentEntity.id,
         currentEntity.type,
         selectedConversation.entityId,
         selectedConversation.entityType,
-        messageText.trim()
+        messageToSend
       );
       
       if (result.success) {
-        setMessageText('');
-        
-        // Add message to local state immediately
-        const newMessage: Message = {
-          messageId: result.data!.messageId,
-          senderId: currentEntity.id,
-          senderType: 'spotter',
-          senderName: 'You',
-          messageContent: messageText.trim(),
-          messageType: 'text',
-          isRead: true,
-          createdAt: new Date().toISOString(),
-          isOwnMessage: true
-        };
-        
-        setMessages(prev => [...prev, newMessage]);
-        messagesListRef.current?.scrollToEnd({ animated: true });
+        // Replace temp message with real one
+        setMessages(prev => prev.map(msg => 
+          msg.messageId === tempId 
+            ? { ...msg, messageId: result.data!.messageId }
+            : msg
+        ));
         
         // Update conversations
         loadAllConversations();
+      } else {
+        // Remove optimistic message on failure
+        setMessages(prev => prev.filter(msg => msg.messageId !== tempId));
+        // Restore message text so user can try again
+        setMessageText(messageToSend);
       }
     } catch (error) {
       console.error('Error sending message:', error);
-    } finally {
-      setSendingMessage(false);
+      // Remove optimistic message on error
+      setMessages(prev => prev.filter(msg => msg.messageId !== tempId));
+      // Restore message text so user can try again
+      setMessageText(messageToSend);
     }
   };
 
@@ -555,16 +573,12 @@ const MessagesPage: React.FC = () => {
               <TouchableOpacity
                 style={[
                   styles.sendButton,
-                  (!messageText.trim() || sendingMessage) && styles.sendButtonDisabled
+                  !messageText.trim() && styles.sendButtonDisabled
                 ]}
                 onPress={sendMessage}
-                disabled={!messageText.trim() || sendingMessage}
+                disabled={!messageText.trim()}
               >
-                {sendingMessage ? (
-                  <ActivityIndicator size="small" color="#fff" />
-                ) : (
-                  <Text style={styles.sendButtonText}>Send</Text>
-                )}
+                <Text style={styles.sendButtonText}>Send</Text>
               </TouchableOpacity>
             </View>
           </KeyboardAvoidingView>
@@ -597,7 +611,7 @@ const MessagesPage: React.FC = () => {
               style={styles.searchInput}
               value={searchQuery}
               onChangeText={searchEntities}
-              placeholder="Search by name..."
+              placeholder="Search spotters by name..."
               placeholderTextColor="#999"
               autoFocus
             />

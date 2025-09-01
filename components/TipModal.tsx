@@ -10,6 +10,8 @@ import {
   ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
+  ScrollView,
+  Dimensions,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { tipsService, EntityType, TipPayload } from '../services/tipsService';
@@ -23,6 +25,8 @@ interface TipModalProps {
   recipientName: string;
 }
 
+const { height: SCREEN_HEIGHT } = Dimensions.get('window');
+
 const TipModal: React.FC<TipModalProps> = ({
   visible,
   onClose,
@@ -30,6 +34,7 @@ const TipModal: React.FC<TipModalProps> = ({
   recipientType,
   recipientName,
 }) => {
+  const [currentStep, setCurrentStep] = useState<'amount' | 'message' | 'confirm'>('amount');
   const [selectedAmount, setSelectedAmount] = useState<number | null>(null);
   const [customAmount, setCustomAmount] = useState<string>('');
   const [tipMessage, setTipMessage] = useState<string>('');
@@ -57,6 +62,7 @@ const TipModal: React.FC<TipModalProps> = ({
   };
 
   const resetForm = () => {
+    setCurrentStep('amount');
     setSelectedAmount(null);
     setCustomAmount('');
     setTipMessage('');
@@ -100,12 +106,7 @@ const TipModal: React.FC<TipModalProps> = ({
     return null;
   };
 
-  const handleSendTip = async () => {
-    if (!currentUser) {
-      Alert.alert('Error', 'Please log in to send tips');
-      return;
-    }
-
+  const handleNextStep = () => {
     const finalAmount = getFinalAmount();
     if (!finalAmount) {
       Alert.alert('Error', 'Please select or enter a tip amount');
@@ -116,6 +117,37 @@ const TipModal: React.FC<TipModalProps> = ({
     const validation = tipsService.validateTipAmount(finalAmount);
     if (!validation.valid) {
       Alert.alert('Invalid Amount', validation.error);
+      return;
+    }
+
+    setCurrentStep('message');
+  };
+
+  const handlePreviousStep = () => {
+    if (currentStep === 'message') {
+      setCurrentStep('amount');
+    } else if (currentStep === 'confirm') {
+      setCurrentStep('message');
+    }
+  };
+
+  const handleSkipMessage = () => {
+    setCurrentStep('confirm');
+  };
+
+  const handleAddMessage = () => {
+    setCurrentStep('confirm');
+  };
+
+  const handleSendTip = async () => {
+    if (!currentUser) {
+      Alert.alert('Error', 'Please log in to send tips');
+      return;
+    }
+
+    const finalAmount = getFinalAmount();
+    if (!finalAmount) {
+      Alert.alert('Error', 'Please select or enter a tip amount');
       return;
     }
 
@@ -179,128 +211,240 @@ const TipModal: React.FC<TipModalProps> = ({
   };
 
   const finalAmount = getFinalAmount();
-  const canSendTip = finalAmount && finalAmount > 0 && !processing;
+
+  const renderAmountStep = () => (
+    <>
+      <Text style={styles.stepTitle}>How much would you like to tip?</Text>
+      
+      {/* Predefined Amounts */}
+      <View style={styles.amountGrid}>
+        {predefinedAmounts.map((amount) => (
+          <TouchableOpacity
+            key={amount}
+            style={[
+              styles.amountButton,
+              selectedAmount === amount && styles.amountButtonSelected
+            ]}
+            onPress={() => handleAmountSelect(amount)}
+          >
+            <Text style={[
+              styles.amountButtonText,
+              selectedAmount === amount && styles.amountButtonTextSelected
+            ]}>
+              ${amount}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+
+      {/* Custom Amount */}
+      <Text style={styles.orText}>Or enter custom amount</Text>
+      <View style={styles.customAmountContainer}>
+        <Text style={styles.currencySymbol}>$</Text>
+        <TextInput
+          style={styles.customAmountInput}
+          value={customAmount}
+          onChangeText={handleCustomAmountChange}
+          placeholder="0.00"
+          keyboardType="decimal-pad"
+          placeholderTextColor="#999"
+        />
+      </View>
+
+      {/* Next Button */}
+      <TouchableOpacity
+        style={[
+          styles.primaryButton,
+          !finalAmount && styles.primaryButtonDisabled
+        ]}
+        onPress={handleNextStep}
+        disabled={!finalAmount}
+      >
+        <LinearGradient
+          colors={finalAmount ? ["#ff00ff", "#2a2882"] : ["#ccc", "#999"]}
+          style={styles.primaryButtonGradient}
+        >
+          <Text style={styles.primaryButtonText}>
+            Next {finalAmount ? `(${tipsService.formatCurrency(finalAmount)})` : ''}
+          </Text>
+        </LinearGradient>
+      </TouchableOpacity>
+    </>
+  );
+
+  const renderMessageStep = () => (
+    <>
+      <TouchableOpacity onPress={handlePreviousStep} style={styles.backButton}>
+        <Text style={styles.backButtonText}>← Back</Text>
+      </TouchableOpacity>
+
+      <Text style={styles.stepTitle}>Add a message (optional)</Text>
+      <Text style={styles.stepSubtitle}>
+        Let {recipientName} know you appreciate them!
+      </Text>
+
+      <TextInput
+        style={styles.messageInput}
+        value={tipMessage}
+        onChangeText={setTipMessage}
+        placeholder="Say something nice..."
+        placeholderTextColor="#999"
+        multiline
+        numberOfLines={4}
+        maxLength={200}
+        textAlignVertical="top"
+        autoFocus
+      />
+
+      <Text style={styles.characterCount}>
+        {tipMessage.length}/200 characters
+      </Text>
+
+      <View style={styles.messageButtons}>
+        <TouchableOpacity
+          style={styles.secondaryButton}
+          onPress={handleSkipMessage}
+        >
+          <Text style={styles.secondaryButtonText}>Skip</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={styles.primaryButton}
+          onPress={handleAddMessage}
+        >
+          <LinearGradient
+            colors={["#ff00ff", "#2a2882"]}
+            style={styles.primaryButtonGradient}
+          >
+            <Text style={styles.primaryButtonText}>Continue</Text>
+          </LinearGradient>
+        </TouchableOpacity>
+      </View>
+    </>
+  );
+
+  const renderConfirmStep = () => (
+    <>
+      <TouchableOpacity onPress={handlePreviousStep} style={styles.backButton}>
+        <Text style={styles.backButtonText}>← Back</Text>
+      </TouchableOpacity>
+
+      <Text style={styles.stepTitle}>Confirm Your Tip</Text>
+
+      {/* Summary */}
+      <View style={styles.summaryContainer}>
+        <View style={styles.summaryRow}>
+          <Text style={styles.summaryLabel}>Recipient:</Text>
+          <Text style={styles.summaryValue}>{recipientName}</Text>
+        </View>
+        
+        <View style={styles.summaryRow}>
+          <Text style={styles.summaryLabel}>Amount:</Text>
+          <Text style={styles.summaryAmount}>
+            {tipsService.formatCurrency(finalAmount!)}
+          </Text>
+        </View>
+
+        {tipMessage && (
+          <View style={styles.summaryMessageContainer}>
+            <Text style={styles.summaryLabel}>Message:</Text>
+            <Text style={styles.summaryMessage}>"{tipMessage}"</Text>
+          </View>
+        )}
+      </View>
+
+      {/* Band Split Info */}
+      {recipientType === 'band' && (
+        <View style={styles.infoContainer}>
+          <Text style={styles.infoText}>
+            💡 This tip will be split evenly among all band members
+          </Text>
+        </View>
+      )}
+
+      {/* Send Button */}
+      <TouchableOpacity
+        style={[styles.primaryButton, processing && styles.primaryButtonDisabled]}
+        onPress={handleSendTip}
+        disabled={processing}
+      >
+        <LinearGradient
+          colors={!processing ? ["#ff00ff", "#2a2882"] : ["#ccc", "#999"]}
+          style={styles.primaryButtonGradient}
+        >
+          {processing ? (
+            <ActivityIndicator color="#fff" size="small" />
+          ) : (
+            <Text style={styles.primaryButtonText}>
+              Send Tip {tipsService.formatCurrency(finalAmount!)}
+            </Text>
+          )}
+        </LinearGradient>
+      </TouchableOpacity>
+
+      <Text style={styles.disclaimerText}>
+        Payments are processed securely through Stripe
+      </Text>
+    </>
+  );
 
   return (
     <Modal visible={visible} transparent animationType="slide">
-      <KeyboardAvoidingView 
-        style={styles.modalContainer}
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-      >
-        <View style={styles.modalContent}>
-          <LinearGradient
-            colors={["#2a2882", "#ff00ff"]}
-            style={styles.modalHeader}
-          >
-            <Text style={styles.modalTitle}>Tip {recipientName}</Text>
-            <TouchableOpacity 
-              style={styles.closeButton}
-              onPress={onClose}
-              disabled={processing}
-            >
-              <Text style={styles.closeButtonText}>✕</Text>
-            </TouchableOpacity>
-          </LinearGradient>
-
-          <View style={styles.modalBody}>
-            {/* Predefined Amounts */}
-            <Text style={styles.sectionTitle}>Select Amount</Text>
-            <View style={styles.amountGrid}>
-              {predefinedAmounts.map((amount) => (
-                <TouchableOpacity
-                  key={amount}
-                  style={[
-                    styles.amountButton,
-                    selectedAmount === amount && styles.amountButtonSelected
-                  ]}
-                  onPress={() => handleAmountSelect(amount)}
+      <View style={styles.modalContainer}>
+        <KeyboardAvoidingView 
+          style={styles.keyboardAvoidingView}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
+        >
+          <View style={styles.modalOverlay}>
+            <View style={styles.modalContent}>
+              <LinearGradient
+                colors={["#2a2882", "#ff00ff"]}
+                style={styles.modalHeader}
+              >
+                <Text style={styles.modalTitle}>Tip {recipientName}</Text>
+                <TouchableOpacity 
+                  style={styles.closeButton}
+                  onPress={onClose}
                   disabled={processing}
                 >
-                  <Text style={[
-                    styles.amountButtonText,
-                    selectedAmount === amount && styles.amountButtonTextSelected
-                  ]}>
-                    ${amount}
-                  </Text>
+                  <Text style={styles.closeButtonText}>✕</Text>
                 </TouchableOpacity>
-              ))}
-            </View>
-
-            {/* Custom Amount */}
-            <Text style={styles.sectionTitle}>Or Enter Custom Amount</Text>
-            <View style={styles.customAmountContainer}>
-              <Text style={styles.currencySymbol}>$</Text>
-              <TextInput
-                style={styles.customAmountInput}
-                value={customAmount}
-                onChangeText={handleCustomAmountChange}
-                placeholder="0.00"
-                keyboardType="decimal-pad"
-                editable={!processing}
-              />
-            </View>
-
-            {/* Tip Message */}
-            <Text style={styles.sectionTitle}>Add a Message (Optional)</Text>
-            <TextInput
-              style={styles.messageInput}
-              value={tipMessage}
-              onChangeText={setTipMessage}
-              placeholder="Say something nice..."
-              multiline
-              numberOfLines={3}
-              maxLength={200}
-              editable={!processing}
-            />
-
-            {/* Total Display */}
-            {finalAmount && (
-              <View style={styles.totalContainer}>
-                <Text style={styles.totalLabel}>Total Tip:</Text>
-                <Text style={styles.totalAmount}>
-                  {tipsService.formatCurrency(finalAmount)}
-                </Text>
-              </View>
-            )}
-
-            {/* Band Split Info */}
-            {recipientType === 'band' && finalAmount && (
-              <View style={styles.infoContainer}>
-                <Text style={styles.infoText}>
-                  💡 This tip will be split evenly among all band members
-                </Text>
-              </View>
-            )}
-
-            {/* Send Button */}
-            <TouchableOpacity
-              style={[
-                styles.sendButton,
-                !canSendTip && styles.sendButtonDisabled
-              ]}
-              onPress={handleSendTip}
-              disabled={!canSendTip}
-            >
-              <LinearGradient
-                colors={canSendTip ? ["#ff00ff", "#2a2882"] : ["#ccc", "#999"]}
-                style={styles.sendButtonGradient}
-              >
-                {processing ? (
-                  <ActivityIndicator color="#fff" size="small" />
-                ) : (
-                  <Text style={styles.sendButtonText}>
-                    Send Tip {finalAmount ? tipsService.formatCurrency(finalAmount) : ''}
-                  </Text>
-                )}
               </LinearGradient>
-            </TouchableOpacity>
 
-            <Text style={styles.disclaimerText}>
-              Payments are processed securely through Stripe
-            </Text>
+              {/* Progress Indicator */}
+              <View style={styles.progressContainer}>
+                <View style={styles.progressBar}>
+                  <View 
+                    style={[
+                      styles.progressFill,
+                      { 
+                        width: currentStep === 'amount' ? '33%' : 
+                               currentStep === 'message' ? '66%' : '100%' 
+                      }
+                    ]}
+                  />
+                </View>
+                <Text style={styles.progressText}>
+                  Step {currentStep === 'amount' ? '1' : currentStep === 'message' ? '2' : '3'} of 3
+                </Text>
+              </View>
+
+              <ScrollView 
+                style={styles.modalBody}
+                contentContainerStyle={styles.modalBodyContent}
+                keyboardShouldPersistTaps="handled"
+                showsVerticalScrollIndicator={false}
+                bounces={false}
+              >
+                {currentStep === 'amount' && renderAmountStep()}
+                {currentStep === 'message' && renderMessageStep()}
+                {currentStep === 'confirm' && renderConfirmStep()}
+              </ScrollView>
+            </View>
           </View>
-        </View>
-      </KeyboardAvoidingView>
+        </KeyboardAvoidingView>
+      </View>
     </Modal>
   );
 };
@@ -309,29 +453,30 @@ const styles = StyleSheet.create({
   modalContainer: {
     flex: 1,
     backgroundColor: 'rgba(0, 0, 0, 0.5)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    zIndex: 9999,
-    elevation: 9999,
+  },
+  keyboardAvoidingView: {
+    flex: 1,
+  },
+  modalOverlay: {
+    flex: 1,
+    justifyContent: 'flex-end',
   },
   modalContent: {
     backgroundColor: '#fff',
-    borderRadius: 20,
-    maxHeight: '90%',
-    width: '90%',
-    maxWidth: 400,
-    overflow: 'hidden',
-    zIndex: 10000,
-    elevation: 10000,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    height: SCREEN_HEIGHT * 0.75,
+    width: '100%',
   },
   modalHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    padding: 20,
+    padding: 15,
+    paddingTop: 20,
   },
   modalTitle: {
-    fontSize: 20,
+    fontSize: 18,
     fontFamily: 'Audiowide-Regular',
     color: '#fff',
     flex: 1,
@@ -349,44 +494,94 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: 'bold',
   },
-  modalBody: {
-    padding: 20,
+  progressContainer: {
+    padding: 10,
+    backgroundColor: '#f8f9fa',
   },
-  sectionTitle: {
+  progressBar: {
+    height: 4,
+    backgroundColor: '#e0e0e0',
+    borderRadius: 2,
+    overflow: 'hidden',
+  },
+  progressFill: {
+    height: '100%',
+    backgroundColor: '#ff00ff',
+    borderRadius: 2,
+  },
+  progressText: {
+    fontSize: 12,
+    color: '#666',
+    textAlign: 'center',
+    marginTop: 8,
+  },
+  modalBody: {
+    flex: 1,
+    backgroundColor: '#fff',
+  },
+  modalBodyContent: {
+    padding: 20,
+    paddingBottom: 40,
+    flexGrow: 1,
+  },
+  stepTitle: {
     fontSize: 16,
     fontFamily: 'Amiko-Regular',
     fontWeight: '600',
     color: '#333',
+    marginBottom: 8,
+    textAlign: 'center',
+  },
+  stepSubtitle: {
+    fontSize: 13,
+    fontFamily: 'Amiko-Regular',
+    color: '#666',
     marginBottom: 15,
-    marginTop: 10,
+    textAlign: 'center',
+  },
+  backButton: {
+    marginBottom: 15,
+  },
+  backButtonText: {
+    fontSize: 14,
+    color: '#2a2882',
+    fontWeight: '600',
   },
   amountGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 10,
-    marginBottom: 20,
+    justifyContent: 'space-between',
+    marginBottom: 15,
+    paddingHorizontal: 10,
   },
   amountButton: {
     backgroundColor: '#f8f9fa',
     borderRadius: 10,
-    padding: 15,
-    minWidth: 70,
+    padding: 12,
+    width: '30%',
     alignItems: 'center',
     borderWidth: 2,
     borderColor: '#e0e0e0',
+    marginBottom: 10,
   },
   amountButtonSelected: {
     backgroundColor: '#ff00ff',
     borderColor: '#ff00ff',
   },
   amountButtonText: {
-    fontSize: 16,
+    fontSize: 18,
     fontFamily: 'Amiko-Regular',
     fontWeight: '600',
     color: '#333',
   },
   amountButtonTextSelected: {
     color: '#fff',
+  },
+  orText: {
+    fontSize: 14,
+    color: '#666',
+    textAlign: 'center',
+    marginVertical: 15,
   },
   customAmountContainer: {
     flexDirection: 'row',
@@ -397,9 +592,10 @@ const styles = StyleSheet.create({
     borderColor: '#e0e0e0',
     paddingHorizontal: 15,
     marginBottom: 20,
+    marginHorizontal: 10,
   },
   currencySymbol: {
-    fontSize: 18,
+    fontSize: 20,
     fontFamily: 'Amiko-Regular',
     fontWeight: '600',
     color: '#333',
@@ -407,7 +603,7 @@ const styles = StyleSheet.create({
   },
   customAmountInput: {
     flex: 1,
-    fontSize: 18,
+    fontSize: 20,
     fontFamily: 'Amiko-Regular',
     color: '#333',
     paddingVertical: 15,
@@ -421,30 +617,92 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontFamily: 'Amiko-Regular',
     color: '#333',
-    textAlignVertical: 'top',
-    marginBottom: 20,
-    minHeight: 80,
+    minHeight: 120,
+    marginBottom: 10,
   },
-  totalContainer: {
+  characterCount: {
+    fontSize: 12,
+    color: '#666',
+    textAlign: 'right',
+    marginBottom: 20,
+  },
+  messageButtons: {
+    flexDirection: 'row',
+    gap: 15,
+  },
+  primaryButton: {
+    flex: 1,
+  },
+  primaryButtonDisabled: {
+    opacity: 0.5,
+  },
+  primaryButtonGradient: {
+    paddingVertical: 15,
+    borderRadius: 25,
+    alignItems: 'center',
+  },
+  primaryButtonText: {
+    fontSize: 16,
+    fontFamily: 'Amiko-Regular',
+    fontWeight: '600',
+    color: '#fff',
+  },
+  secondaryButton: {
+    flex: 1,
+    backgroundColor: '#f8f9fa',
+    borderRadius: 25,
+    paddingVertical: 15,
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: '#e0e0e0',
+  },
+  secondaryButtonText: {
+    fontSize: 16,
+    fontFamily: 'Amiko-Regular',
+    fontWeight: '600',
+    color: '#666',
+  },
+  summaryContainer: {
+    backgroundColor: '#f8f9fa',
+    borderRadius: 10,
+    padding: 20,
+    marginVertical: 20,
+  },
+  summaryRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    backgroundColor: 'rgba(255, 0, 255, 0.1)',
-    borderRadius: 10,
-    padding: 15,
-    marginBottom: 15,
+    marginBottom: 10,
   },
-  totalLabel: {
-    fontSize: 18,
+  summaryLabel: {
+    fontSize: 14,
+    fontFamily: 'Amiko-Regular',
+    color: '#666',
+  },
+  summaryValue: {
+    fontSize: 16,
     fontFamily: 'Amiko-Regular',
     fontWeight: '600',
     color: '#333',
   },
-  totalAmount: {
+  summaryAmount: {
     fontSize: 20,
     fontFamily: 'Audiowide-Regular',
     color: '#ff00ff',
     fontWeight: 'bold',
+  },
+  summaryMessageContainer: {
+    marginTop: 10,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: '#e0e0e0',
+  },
+  summaryMessage: {
+    fontSize: 14,
+    fontFamily: 'Amiko-Regular',
+    color: '#333',
+    fontStyle: 'italic',
+    marginTop: 5,
   },
   infoContainer: {
     backgroundColor: 'rgba(255, 193, 7, 0.1)',
@@ -458,29 +716,13 @@ const styles = StyleSheet.create({
     color: '#856404',
     textAlign: 'center',
   },
-  sendButton: {
-    marginBottom: 15,
-  },
-  sendButtonDisabled: {
-    opacity: 0.5,
-  },
-  sendButtonGradient: {
-    paddingVertical: 15,
-    borderRadius: 25,
-    alignItems: 'center',
-  },
-  sendButtonText: {
-    fontSize: 16,
-    fontFamily: 'Amiko-Regular',
-    fontWeight: '600',
-    color: '#fff',
-  },
   disclaimerText: {
     fontSize: 12,
     fontFamily: 'Amiko-Regular',
     color: '#666',
     textAlign: 'center',
     fontStyle: 'italic',
+    marginTop: 15,
   },
 });
 

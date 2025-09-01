@@ -147,7 +147,7 @@ const SongUploadForm: React.FC<SongUploadFormProps> = ({
       }
 
       const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.images,
+        mediaTypes: 'images' as any, // TypeScript expects 'Images' but runtime needs 'images'
         allowsEditing: true,
         aspect: [1, 1],
         quality: 0.8,
@@ -261,13 +261,19 @@ const SongUploadForm: React.FC<SongUploadFormProps> = ({
 
       console.log('File object for upload:', fileObject);
 
+      // Normalize MIME type - convert image/jpg to image/jpeg
+      let contentType = fileObject.type;
+      if (contentType === 'image/jpg') {
+        contentType = 'image/jpeg';
+      }
+
       // Use the Supabase client's upload method with the file object
       const { data, error } = await supabase.storage
         .from(bucket)
-        .upload(filePath, fileObject, {
+        .upload(filePath, fileObject as any, {
           cacheControl: '3600',
           upsert: false,
-          contentType: fileObject.type,
+          contentType: contentType,
         });
 
       if (error) {

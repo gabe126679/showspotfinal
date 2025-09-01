@@ -1,0 +1,46 @@
+{
+  "cli": {
+    "version": ">= 5.0.0",
+    "appVersionSource": "local"
+  },
+  "build": {
+    "development": {
+      "developmentClient": true,
+      "distribution": "internal",
+      "ios": {
+        "simulator": true
+      }
+    },
+    "preview": {
+      "distribution": "internal",
+      "ios": {
+        "simulator": true
+      },
+      "android": {
+        "buildType": "apk"
+      }
+    },
+    "production": {
+      "env": {
+        "EXPO_PUBLIC_ENVIRONMENT": "production",
+        "EXPO_PUBLIC_SUPABASE_URL": "https://myqrzbdxvfqhcrsiintm.supabase.co",
+        "EXPO_PUBLIC_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im15cXJ6YmR4dmZxaGNyc2lpbnRtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDkzODgzODYsImV4cCI6MjA2NDk2NDM4Nn0.fj8JhgtX1ICRT4hGAQ3dvsFw9codTiBWW1CErc-REVM",
+        "EXPO_PUBLIC_STRIPE_PUBLISHABLE_KEY": "pk_test_51RSxsVPXnuDR4HpW4f8KnjUmnUss8AqGomhGDqApASaZa8GYVgPqKA36NpCUlTFuL0c3O2eiIFIJmzLvIrV1pcrI004EqG7vo6"
+      },
+      "ios": {
+        "cache": {
+          "disabled": true
+        }
+      },
+      "node": "18.18.0"
+    }
+  },
+  "submit": {
+    "production": {
+      "ios": {
+        "appleId": "gabe126@gmail.com",
+        "ascAppId": "6738718907"
+      }
+    }
+  }
+}

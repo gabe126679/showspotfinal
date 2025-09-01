@@ -138,9 +138,18 @@ const uploadAndContinue = async () => {
 
   return (
     <SafeAreaView style={styles.container}>
+      {/* Back Button */}
+      <TouchableOpacity 
+        style={styles.backButton}
+        onPress={() => navigation.goBack()}
+      >
+        <Text style={styles.backButtonText}>← Back</Text>
+      </TouchableOpacity>
+      
       <Text style={styles.title}>Upload a Profile Picture</Text>
 
-      <TouchableOpacity onPress={pickImage}>
+      <View style={styles.contentContainer}>
+        <TouchableOpacity onPress={pickImage}>
         {image ? (
           <Image source={{ uri: image.uri }} style={styles.image} />
         ) : (
@@ -161,6 +170,7 @@ const uploadAndContinue = async () => {
           <Text style={styles.buttonText}>Continue</Text>
         )}
       </TouchableOpacity>
+      </View>
     </SafeAreaView>
   );
 }
@@ -170,14 +180,29 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#fff',
     paddingHorizontal: 20,
-    alignItems: 'center',
-    justifyContent: 'center',
+    paddingTop: 20,
+  },
+  backButton: {
+    alignSelf: 'flex-start',
+    marginBottom: 20,
+    padding: 10,
+  },
+  backButtonText: {
+    fontSize: 16,
+    color: '#2a2882',
+    fontWeight: '600',
   },
   title: {
     fontSize: 22,
     fontWeight: 'bold',
     marginBottom: 20,
     color: '#2a2882',
+    textAlign: 'center',
+  },
+  contentContainer: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   image: {
     width: 300,

@@ -28,7 +28,7 @@ import RatingModal from "./RatingModal";
 import { ratingService, RatingInfo } from '../services/ratingService';
 import { followerService, FollowerInfo } from '../services/followerService';
 import TipModal from "./TipModal";
-import BetaDisclaimer from "./BetaDisclaimer";
+import PaymentDisclaimer from "./PaymentDisclaimer";
 import { formatShowDateTime } from '../utils/showDateDisplay';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get("window");
@@ -108,7 +108,7 @@ const VenuePublicProfile: React.FC<VenuePublicProfileProps> = ({ route }) => {
   
   // Tip states
   const [showTipModal, setShowTipModal] = useState(false);
-  const [showBetaDisclaimer, setShowBetaDisclaimer] = useState(false);
+  const [showPaymentDisclaimer, setShowPaymentDisclaimer] = useState(false);
   const [pendingAction, setPendingAction] = useState<{type: string, data?: any} | null>(null);
   
   // Common states - matching profile.tsx exactly
@@ -150,7 +150,7 @@ const VenuePublicProfile: React.FC<VenuePublicProfileProps> = ({ route }) => {
       onPanResponderGrant: () => {
         if (Platform.OS === 'ios') {
           try {
-            Vibration.impact && Vibration.impact('light' as any);
+            (Vibration as any).impact && (Vibration as any).impact('light');
           } catch (error) {
             // Fallback for older versions
             Vibration.vibrate(50);
@@ -435,14 +435,14 @@ const VenuePublicProfile: React.FC<VenuePublicProfileProps> = ({ route }) => {
     }
   };
 
-  // Beta disclaimer handlers
-  const handleBetaAction = (actionType: string, actionData?: any) => {
+  // Payment disclaimer handlers
+  const handlePaymentAction = (actionType: string, actionData?: any) => {
     setPendingAction({ type: actionType, data: actionData });
-    setShowBetaDisclaimer(true);
+    setShowPaymentDisclaimer(true);
   };
 
-  const handleBetaProceed = () => {
-    setShowBetaDisclaimer(false);
+  const handlePaymentProceed = () => {
+    setShowPaymentDisclaimer(false);
     
     if (pendingAction) {
       switch (pendingAction.type) {
@@ -454,8 +454,8 @@ const VenuePublicProfile: React.FC<VenuePublicProfileProps> = ({ route }) => {
     }
   };
 
-  const handleBetaCancel = () => {
-    setShowBetaDisclaimer(false);
+  const handlePaymentCancel = () => {
+    setShowPaymentDisclaimer(false);
     setPendingAction(null);
   };
 
@@ -811,7 +811,7 @@ const VenuePublicProfile: React.FC<VenuePublicProfileProps> = ({ route }) => {
           {!isOwner && (
             <TouchableOpacity 
               style={styles.instagramActionButton} 
-              onPress={() => handleBetaAction('tip')}
+              onPress={() => handlePaymentAction('tip')}
               activeOpacity={0.7}
             >
               <View style={styles.instagramButtonInner}>
@@ -968,10 +968,10 @@ const VenuePublicProfile: React.FC<VenuePublicProfileProps> = ({ route }) => {
         recipientName={venueData?.venue_name || 'Venue'}
       />
 
-      <BetaDisclaimer
-        visible={showBetaDisclaimer}
-        onClose={handleBetaCancel}
-        onProceed={handleBetaProceed}
+      <PaymentDisclaimer
+        visible={showPaymentDisclaimer}
+        onClose={handlePaymentCancel}
+        onProceed={handlePaymentProceed}
         action="tip"
         itemName={venueData?.venue_name}
       />

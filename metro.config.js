@@ -11,4 +11,6 @@ config.resolver = {
   sourceExts: [...config.resolver.sourceExts, "svg"],
 };
 
+// Note: typescript.ignoreBuildErrors is not supported in metro config
+
 module.exports = config;

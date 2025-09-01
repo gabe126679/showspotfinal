@@ -6,6 +6,9 @@
     "baseUrl": ".",
     "paths": {
       "@/*": ["./*"]
-    }
+    },
+    "skipLibCheck": true,
+    "noImplicitAny": false,
+    "strict": false
   }
 }

@@ -17,8 +17,18 @@
       "Bash(find:*)",
       "Bash(psql:*)",
       "Bash(node:*)",
-      "WebFetch(domain:www.interaction-design.org)"
+      "WebFetch(domain:www.interaction-design.org)",
+      "Bash(npm ls:*)",
+      "Bash(npm cache clean:*)",
+      "Bash(npm install:*)",
+      "Bash(eas build:*)",
+      "Bash(npm uninstall:*)",
+      "Bash(npm audit:*)",
+      "Bash(eas submit:*)",
+      "Bash(mv:*)",
+      "Bash(cp:*)"
     ],
-    "deny": []
+    "deny": [],
+    "defaultMode": "acceptEdits"
   }
 }

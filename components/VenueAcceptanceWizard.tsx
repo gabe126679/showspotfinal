@@ -229,7 +229,7 @@ const VenueAcceptanceWizard: React.FC<VenueAcceptanceWizardProps> = ({ route }) 
         }
       }
 
-      // Notify promoter
+      // Notify promoter (without guarantee since promoters don't get paid)
       notifications.push(
         notificationService.sendNotification(
           showData.show_promoter,
@@ -237,7 +237,7 @@ const VenueAcceptanceWizard: React.FC<VenueAcceptanceWizardProps> = ({ route }) 
           {
             show_id: show_id,
             venue_name: showData.venue_name,
-            artist_guarantee: individualArtistGuarantee,
+            // Remove artist_guarantee for promoter
             show_date: showData.show_preferred_date,
             show_time: showData.show_preferred_time,
             ticket_price: ticketPrice,

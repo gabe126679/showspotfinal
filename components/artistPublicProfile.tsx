@@ -33,7 +33,7 @@ import RatingModal from "./RatingModal";
 import { ratingService, RatingInfo } from '../services/ratingService';
 import { followerService, FollowerInfo } from '../services/followerService';
 import TipModal from "./TipModal";
-import BetaDisclaimer from "./BetaDisclaimer";
+import PaymentDisclaimer from "./PaymentDisclaimer";
 import { formatShowDateTime } from '../utils/showDateDisplay';
 import { albumService, Album } from '../services/albumService';
 import AlbumImageUploadModal from './AlbumImageUploadModal';
@@ -144,7 +144,7 @@ const ArtistPublicProfile: React.FC<ArtistPublicProfileProps> = ({ route }) => {
   
   // Tip states
   const [showTipModal, setShowTipModal] = useState(false);
-  const [showBetaDisclaimer, setShowBetaDisclaimer] = useState(false);
+  const [showPaymentDisclaimer, setShowPaymentDisclaimer] = useState(false);
   const [pendingAction, setPendingAction] = useState<{type: string, data?: any} | null>(null);
   
   // Common states - matching profile.tsx exactly
@@ -407,14 +407,14 @@ const ArtistPublicProfile: React.FC<ArtistPublicProfileProps> = ({ route }) => {
     setRatingInfo(newRating);
   };
 
-  // Beta disclaimer handlers
-  const handleBetaAction = (actionType: string, actionData?: any) => {
+  // Payment disclaimer handlers
+  const handlePaymentAction = (actionType: string, actionData?: any) => {
     setPendingAction({ type: actionType, data: actionData });
-    setShowBetaDisclaimer(true);
+    setShowPaymentDisclaimer(true);
   };
 
-  const handleBetaProceed = () => {
-    setShowBetaDisclaimer(false);
+  const handlePaymentProceed = () => {
+    setShowPaymentDisclaimer(false);
     
     if (pendingAction) {
       switch (pendingAction.type) {
@@ -435,8 +435,8 @@ const ArtistPublicProfile: React.FC<ArtistPublicProfileProps> = ({ route }) => {
     }
   };
 
-  const handleBetaCancel = () => {
-    setShowBetaDisclaimer(false);
+  const handlePaymentCancel = () => {
+    setShowPaymentDisclaimer(false);
     setPendingAction(null);
   };
 
@@ -810,7 +810,7 @@ const ArtistPublicProfile: React.FC<ArtistPublicProfileProps> = ({ route }) => {
           <Text style={styles.songPrice}>${song.song_price}</Text>
           <TouchableOpacity
             style={styles.songPurchaseButton}
-            onPress={() => handleBetaAction('song', song)}
+            onPress={() => handlePaymentAction('song', song)}
           >
             <Text style={styles.songPurchaseButtonText}>+</Text>
           </TouchableOpacity>
@@ -979,7 +979,7 @@ const ArtistPublicProfile: React.FC<ArtistPublicProfileProps> = ({ route }) => {
                             style={styles.albumPurchaseButton}
                             onPress={(e) => {
                               e.stopPropagation();
-                              handleBetaAction('album', album);
+                              handlePaymentAction('album', album);
                             }}
                           >
                             <Text style={styles.albumPurchaseButtonText}>
@@ -1085,7 +1085,7 @@ const ArtistPublicProfile: React.FC<ArtistPublicProfileProps> = ({ route }) => {
                               style={styles.buyTicketButton}
                               onPress={(e) => {
                                 e.stopPropagation();
-                                handleBetaAction('ticket', show);
+                                handlePaymentAction('ticket', show);
                               }}
                             >
                               <Text style={styles.buyTicketText}>Buy Ticket</Text>
@@ -1397,10 +1397,6 @@ const ArtistPublicProfile: React.FC<ArtistPublicProfileProps> = ({ route }) => {
       
       {/* Header */}
       <View style={styles.headerContainer}>
-        <LinearGradient
-          colors={["#2a2882", "#ff00ff"]}
-          style={StyleSheet.absoluteFillObject}
-        />
         <ShowSpotHeader 
           showBackButton={true}
           onBackPress={() => navigation.goBack()}
@@ -1490,7 +1486,7 @@ const ArtistPublicProfile: React.FC<ArtistPublicProfileProps> = ({ route }) => {
           {!isOwner && (
             <TouchableOpacity 
               style={styles.instagramActionButton} 
-              onPress={() => handleBetaAction('tip')}
+              onPress={() => handlePaymentAction('tip')}
               activeOpacity={0.7}
             >
               <View style={styles.instagramButtonInner}>
@@ -1650,10 +1646,10 @@ const ArtistPublicProfile: React.FC<ArtistPublicProfileProps> = ({ route }) => {
         recipientName={artistData?.artist_name || 'Artist'}
       />
 
-      <BetaDisclaimer
-        visible={showBetaDisclaimer}
-        onClose={handleBetaCancel}
-        onProceed={handleBetaProceed}
+      <PaymentDisclaimer
+        visible={showPaymentDisclaimer}
+        onClose={handlePaymentCancel}
+        onProceed={handlePaymentProceed}
         action={
           pendingAction?.type === 'tip' ? 'tip' :
           pendingAction?.type === 'ticket' ? 'buy a ticket for' :

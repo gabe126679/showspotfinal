@@ -37,7 +37,7 @@ export default function ArtistPicture({ navigation }) {
       }
 
       const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.images,
+        mediaTypes: 'images' as any, // TypeScript expects 'Images' but runtime needs 'images'
         allowsEditing: true,
         aspect: [393, 682], // iPhone 16 profile display aspect ratio (393x682px)
         quality: 0.8, // Reduced quality for smaller file sizes

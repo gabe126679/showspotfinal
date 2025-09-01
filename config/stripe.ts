@@ -1,10 +1,10 @@
 // Stripe configuration for ShowSpot
-import { loadStripe } from '@stripe/stripe-js';
+// import { loadStripe } from '@stripe/stripe-js'; // Web-only, not needed for React Native
 
 // Stripe configuration - using test keys for development
 export const STRIPE_CONFIG = {
   // Test mode public key
-  PUBLIC_KEY: process.env.EXPO_PUBLIC_STRIPE_PUBLISHABLE_KEY!,
+  PUBLIC_KEY: process.env.EXPO_PUBLIC_STRIPE_PUBLISHABLE_KEY || 'pk_test_placeholder',
   
   // IMPORTANT: Never include secret keys in frontend code!
   // Secret keys should only exist on your backend server
@@ -27,14 +27,13 @@ export const STRIPE_CONFIG = {
   }
 };
 
-// Initialize Stripe
-let stripePromise: Promise<any>;
+// Initialize Stripe - React Native version would use @stripe/stripe-react-native
+// let stripePromise: Promise<any>;
 
 export const getStripe = () => {
-  if (!stripePromise) {
-    stripePromise = loadStripe(STRIPE_CONFIG.PUBLIC_KEY);
-  }
-  return stripePromise;
+  // For React Native, use @stripe/stripe-react-native instead
+  console.warn('getStripe() called - implement with @stripe/stripe-react-native for mobile');
+  return null;
 };
 
 // Stripe payment methods and utilities

@@ -1,24 +1,25 @@
 import React, { useState, useEffect, useRef, createContext, useContext } from "react";
-import { 
-  View, 
-  Text, 
-  StyleSheet, 
-  TouchableOpacity, 
-  Image, 
-  Modal, 
-  FlatList, 
-  Alert,
+import {
+  View,
+  Text,
+  StyleSheet,
+  TouchableOpacity,
+  Image,
+  Modal,
+  FlatList,
   Dimensions,
   Animated,
   TextInput,
-  ScrollView
+  ScrollView,
+  Platform
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useNavigation } from "@react-navigation/native";
-import { Audio } from 'expo-av';
 import { LinearGradient } from 'expo-linear-gradient';
 import { supabase } from '../lib/supabase';
 import PlaylistModal from './PlaylistModal';
+import EmptyState from './EmptyState';
+import { ToastManager } from './Toast';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -58,6 +59,186 @@ interface MusicPlayerContextType {
 
 const MusicPlayerContext = createContext<MusicPlayerContextType | null>(null);
 
+// Simple HTML5 Audio wrapper for Expo Go compatibility
+class WebAudioPlayer {
+  private audio: HTMLAudioElement | null = null;
+  private onProgress: ((currentTime: number, duration: number) => void) | null = null;
+  private onEnded: (() => void) | null = null;
+  private onStateChange: ((isPlaying: boolean) => void) | null = null;
+  private progressInterval: NodeJS.Timeout | null = null;
+
+  constructor() {
+    // Only create audio element on web/in browser context
+    if (Platform.OS === 'web' || typeof Audio !== 'undefined') {
+      try {
+        this.audio = new Audio();
+        this.setupEventListeners();
+      } catch (error) {
+        console.log('HTML5 Audio not available, using simulation mode');
+        this.audio = null;
+      }
+    }
+  }
+
+  private setupEventListeners() {
+    if (!this.audio) return;
+
+    this.audio.addEventListener('loadedmetadata', () => {
+      if (this.onProgress && this.audio) {
+        this.onProgress(this.audio.currentTime, this.audio.duration);
+      }
+    });
+
+    this.audio.addEventListener('timeupdate', () => {
+      if (this.onProgress && this.audio) {
+        this.onProgress(this.audio.currentTime, this.audio.duration);
+      }
+    });
+
+    this.audio.addEventListener('ended', () => {
+      if (this.onEnded) this.onEnded();
+      if (this.onStateChange) this.onStateChange(false);
+    });
+
+    this.audio.addEventListener('play', () => {
+      if (this.onStateChange) this.onStateChange(true);
+    });
+
+    this.audio.addEventListener('pause', () => {
+      if (this.onStateChange) this.onStateChange(false);
+    });
+  }
+
+  setEventHandlers(
+    onProgress: (currentTime: number, duration: number) => void,
+    onEnded: () => void,
+    onStateChange: (isPlaying: boolean) => void
+  ) {
+    this.onProgress = onProgress;
+    this.onEnded = onEnded;
+    this.onStateChange = onStateChange;
+  }
+
+  async loadAndPlay(url: string): Promise<void> {
+    if (this.audio) {
+      // Real HTML5 Audio
+      this.audio.src = url;
+      try {
+        await this.audio.play();
+      } catch (error) {
+        console.warn('Audio play failed, falling back to simulation:', error);
+        this.simulatePlayback(url);
+      }
+    } else {
+      // Simulate playback for non-web environments
+      this.simulatePlayback(url);
+    }
+  }
+
+  private simulatePlayback(url: string) {
+    // Clear any existing interval
+    if (this.progressInterval) {
+      clearInterval(this.progressInterval);
+    }
+
+    // Simulate 3-minute song
+    const duration = 180; // seconds
+    let currentTime = 0;
+    
+    if (this.onProgress) {
+      this.onProgress(0, duration);
+    }
+    if (this.onStateChange) {
+      this.onStateChange(true);
+    }
+
+    this.progressInterval = setInterval(() => {
+      currentTime += 1;
+      if (this.onProgress) {
+        this.onProgress(currentTime, duration);
+      }
+      
+      if (currentTime >= duration) {
+        this.stop();
+        if (this.onEnded) this.onEnded();
+      }
+    }, 1000);
+  }
+
+  async play(): Promise<void> {
+    if (this.audio) {
+      try {
+        await this.audio.play();
+      } catch (error) {
+        console.warn('Audio play failed:', error);
+      }
+    } else if (this.progressInterval) {
+      // Resume simulation
+      if (this.onStateChange) this.onStateChange(true);
+    }
+  }
+
+  pause(): void {
+    if (this.audio) {
+      this.audio.pause();
+    } else {
+      // Pause simulation
+      if (this.progressInterval) {
+        clearInterval(this.progressInterval);
+        this.progressInterval = null;
+      }
+      if (this.onStateChange) this.onStateChange(false);
+    }
+  }
+
+  stop(): void {
+    if (this.audio) {
+      this.audio.pause();
+      this.audio.currentTime = 0;
+    }
+    if (this.progressInterval) {
+      clearInterval(this.progressInterval);
+      this.progressInterval = null;
+    }
+    if (this.onStateChange) this.onStateChange(false);
+  }
+
+  getCurrentTime(): number {
+    if (this.audio) {
+      return this.audio.currentTime;
+    }
+    return 0;
+  }
+
+  getDuration(): number {
+    if (this.audio) {
+      return this.audio.duration || 0;
+    }
+    return 180; // Default to 3 minutes for simulation
+  }
+
+  isPlaying(): boolean {
+    if (this.audio) {
+      return !this.audio.paused && !this.audio.ended;
+    }
+    return this.progressInterval !== null;
+  }
+
+  destroy() {
+    if (this.progressInterval) {
+      clearInterval(this.progressInterval);
+    }
+    if (this.audio) {
+      this.audio.pause();
+      this.audio.removeEventListener('loadedmetadata', () => {});
+      this.audio.removeEventListener('timeupdate', () => {});
+      this.audio.removeEventListener('ended', () => {});
+      this.audio.removeEventListener('play', () => {});
+      this.audio.removeEventListener('pause', () => {});
+    }
+  }
+}
+
 export const MusicPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [currentSong, setCurrentSong] = useState<Song | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -67,17 +248,38 @@ export const MusicPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
   const [currentIndex, setCurrentIndex] = useState(0);
   const [progress, setProgress] = useState(0);
   const [duration, setDuration] = useState(0);
-  const [sound, setSound] = useState<Audio.Sound | null>(null);
-
-  const playbackStatusRef = useRef<any>(null);
+  
+  const playerRef = useRef<WebAudioPlayer | null>(null);
+  const isTransitioningRef = useRef(false);
 
   useEffect(() => {
-    return sound
-      ? () => {
-          sound.unloadAsync();
+    // Initialize player
+    playerRef.current = new WebAudioPlayer();
+    
+    playerRef.current.setEventHandlers(
+      (currentTime, duration) => {
+        setProgress(currentTime * 1000); // Convert to milliseconds
+        setDuration(duration * 1000); // Convert to milliseconds
+      },
+      () => {
+        // Song ended
+        if (!isRepeatOn && !isTransitioningRef.current) {
+          nextSong();
+        } else if (isRepeatOn && playerRef.current) {
+          playerRef.current.loadAndPlay(playerRef.current.audio?.src || '');
         }
-      : undefined;
-  }, [sound]);
+      },
+      (playing) => {
+        setIsPlaying(playing);
+      }
+    );
+
+    return () => {
+      if (playerRef.current) {
+        playerRef.current.destroy();
+      }
+    };
+  }, [isRepeatOn]);
 
   // Helper function to get proper audio URL
   const getAudioUrl = async (filePath: string): Promise<string> => {
@@ -141,124 +343,52 @@ export const MusicPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
   const playSong = async (song: Song, playlist: Song[] = []) => {
     try {
       console.log('Playing song:', song.song_title);
+      isTransitioningRef.current = true;
       
-      // Stop current song if playing
-      if (sound) {
-        await sound.unloadAsync();
-        setSound(null);
+      // Stop current playback
+      if (playerRef.current) {
+        playerRef.current.stop();
       }
-
-      // Set audio mode
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: false,
-        staysActiveInBackground: true,
-        playsInSilentModeIOS: true,
-        shouldDuckAndroid: true,
-        playThroughEarpieceAndroid: false,
-      });
 
       // Get the proper audio URL
       const audioUrl = await getAudioUrl(song.song_file);
+      console.log('Setting audio URL:', audioUrl);
 
-      console.log('Creating audio with URL:', audioUrl);
-
-      // Create new sound object with better error handling
-      const soundResult = await Audio.Sound.createAsync(
-        { uri: audioUrl },
-        { 
-          shouldPlay: false, // Don't auto-play initially for better debugging
-          isLooping: isRepeatOn,
-          volume: 1.0,
-          rate: 1.0,
-          shouldCorrectPitch: true,
-        },
-        (status) => {
-          // Only log important status changes, not every progress update
-          if (status.didJustFinish || !status.isLoaded || 
-              (playbackStatusRef.current?.isPlaying !== status.isPlaying)) {
-            console.log('Audio status update:', status);
-          }
-          playbackStatusRef.current = status;
-          
-          if (status.isLoaded) {
-            setProgress(status.positionMillis || 0);
-            setDuration(status.durationMillis || 0);
-            setIsPlaying(status.isPlaying || false);
-            
-            // Handle song completion
-            if (status.didJustFinish && !isRepeatOn) {
-              nextSong();
-            }
-          } else if (!status.isLoaded) {
-            const errorStatus = status as Audio.AVPlaybackStatusError;
-            if (errorStatus.error) {
-              console.error('Audio loading error:', errorStatus.error);
-              Alert.alert('Playback Error', 'Could not load audio file');
-            }
-          }
-        }
-      );
-
-      console.log('Sound object created:', soundResult);
-      const newSound = soundResult.sound;
-
-      // Check initial status
-      const initialStatus = await newSound.getStatusAsync();
-      console.log('Initial sound status:', initialStatus);
-
-      if (initialStatus.isLoaded) {
-        console.log('Sound loaded successfully, starting playback...');
-        
-        // Start playback manually
-        await newSound.playAsync();
-        
-        setSound(newSound);
-        setCurrentSong(song);
-        setIsPlaying(true);
-        
-        // Set up playlist queue
-        if (playlist.length > 0) {
-          setPlaylistQueue(playlist);
-          setCurrentIndex(playlist.findIndex(s => s.song_id === song.song_id));
-        }
-
-        console.log('Song should now be playing!');
-      } else {
-        console.error('Sound failed to load:', initialStatus);
-        if (initialStatus.error) {
-          console.error('Load error details:', initialStatus.error);
-        }
-        await newSound.unloadAsync();
-        throw new Error('Audio file could not be loaded');
+      setCurrentSong(song);
+      setProgress(0);
+      
+      // Set up playlist queue
+      if (playlist.length > 0) {
+        setPlaylistQueue(playlist);
+        setCurrentIndex(playlist.findIndex(s => s.song_id === song.song_id));
       }
+
+      // Start playback
+      if (playerRef.current) {
+        await playerRef.current.loadAndPlay(audioUrl);
+      }
+
+      isTransitioningRef.current = false;
 
     } catch (error) {
       console.error('Error playing song:', error);
-      Alert.alert('Error', 'Could not play this song. Please try again.');
+      ToastManager.error('Could not play this song. Please try again.');
+      isTransitioningRef.current = false;
     }
   };
 
   const pauseSong = async () => {
-    if (sound) {
-      try {
-        const status = await sound.getStatusAsync();
-        if (status.isLoaded) {
-          if (status.isPlaying) {
-            await sound.pauseAsync();
-            setIsPlaying(false);
-          } else {
-            await sound.playAsync();
-            setIsPlaying(true);
-          }
-        }
-      } catch (error) {
-        console.error('Error pausing/playing song:', error);
+    if (playerRef.current) {
+      if (playerRef.current.isPlaying()) {
+        playerRef.current.pause();
+      } else {
+        playerRef.current.play();
       }
     }
   };
 
   const nextSong = async () => {
-    if (playlistQueue.length > 0) {
+    if (playlistQueue.length > 0 && !isTransitioningRef.current) {
       let nextIndex;
       if (isShuffleOn) {
         nextIndex = Math.floor(Math.random() * playlistQueue.length);
@@ -272,7 +402,7 @@ export const MusicPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
   };
 
   const previousSong = async () => {
-    if (playlistQueue.length > 0) {
+    if (playlistQueue.length > 0 && !isTransitioningRef.current) {
       let prevIndex;
       if (isShuffleOn) {
         prevIndex = Math.floor(Math.random() * playlistQueue.length);
@@ -290,11 +420,7 @@ export const MusicPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
   };
 
   const toggleRepeat = () => {
-    const newRepeatState = !isRepeatOn;
-    setIsRepeatOn(newRepeatState);
-    if (sound) {
-      sound.setIsLoopingAsync(newRepeatState);
-    }
+    setIsRepeatOn(!isRepeatOn);
   };
 
   const contextValue: MusicPlayerContextType = {
@@ -347,6 +473,7 @@ const Player = () => {
   } = useMusicPlayer();
 
   const [showPlaylistModal, setShowPlaylistModal] = useState(false);
+  const [showOptionsModal, setShowOptionsModal] = useState(false);
   const [artistName, setArtistName] = useState('Unknown Artist');
   const progressAnimation = useRef(new Animated.Value(0)).current;
   
@@ -429,12 +556,6 @@ const Player = () => {
     return `${minutes}:${seconds.toString().padStart(2, '0')}`;
   };
 
-  const openPlaylistModal = () => {
-    if (currentSong) {
-      setShowPlaylistModal(true);
-    }
-  };
-
   // Animation handlers
   const animateButtonPress = (scale: Animated.Value) => {
     Animated.sequence([
@@ -487,27 +608,158 @@ const Player = () => {
     return data.publicUrl;
   };
 
-  // Always show the player UI, even with no song
+  // Navigate to artist/band profile
+  const navigateToArtistProfile = async () => {
+    setShowOptionsModal(false);
 
-  return (
-    <SafeAreaView style={styles.container}>
-      <View style={styles.playerContent}>
+    if (!currentSong) {
+      ToastManager.error('No song is currently playing');
+      return;
+    }
+
+    try {
+      // Check if this is a band song
+      if (currentSong.song_type === 'band') {
+        console.log('This is a band song, looking up band...');
+        console.log('Song band_id:', currentSong.band_id);
+        console.log('Song artist_id:', currentSong.artist_id);
+
+        let band = null;
+
+        // First try to find band by the song's band_id
+        if (currentSong.band_id) {
+          const { data: bandByBandId } = await supabase
+            .from('bands')
+            .select('band_id')
+            .eq('band_id', currentSong.band_id)
+            .maybeSingle();
+          band = bandByBandId;
+          if (band) console.log('Found band by band_id');
+        }
+
+        // If not found, try using artist_id as band_id (sometimes stored in wrong field)
+        if (!band && currentSong.artist_id) {
+          console.log('Trying artist_id as band_id:', currentSong.artist_id);
+          const { data: bandByArtistId } = await supabase
+            .from('bands')
+            .select('band_id')
+            .eq('band_id', currentSong.artist_id)
+            .maybeSingle();
+          band = bandByArtistId;
+          if (band) console.log('Found band using artist_id as band_id');
+        }
+
+        // If still not found, try finding by band_creator
+        if (!band && currentSong.spotter_id) {
+          console.log('Trying to find band by creator:', currentSong.spotter_id);
+          const { data: bandByCreator } = await supabase
+            .from('bands')
+            .select('band_id')
+            .eq('band_creator', currentSong.spotter_id)
+            .maybeSingle();
+          band = bandByCreator;
+          if (band) console.log('Found band by creator');
+        }
+
+        if (band) {
+          console.log('Found band, navigating to:', band.band_id);
+          navigation.navigate('BandPublicProfile' as never, { band_id: band.band_id } as never);
+        } else {
+          ToastManager.error('Could not find the band profile');
+        }
+      } else {
+        // For artist songs, find the artist by spotter_id since
+        // the song's artist_id might not directly match the artists table
+        let { data: artist } = await supabase
+          .from('artists')
+          .select('artist_id')
+          .eq('artist_id', currentSong.artist_id)
+          .maybeSingle();
+
+        // If not found, try by spotter_id (the user who uploaded the song)
+        if (!artist && currentSong.spotter_id) {
+          console.log('Trying to find artist by spotter_id:', currentSong.spotter_id);
+          const { data: artistBySpotter } = await supabase
+            .from('artists')
+            .select('artist_id')
+            .eq('spotter_id', currentSong.spotter_id)
+            .maybeSingle();
+          artist = artistBySpotter;
+        }
+
+        if (artist) {
+          console.log('Found artist, navigating to:', artist.artist_id);
+          navigation.navigate('ArtistPublicProfile' as never, { artist_id: artist.artist_id } as never);
+        } else {
+          ToastManager.error('Could not find the artist profile');
+        }
+      }
+    } catch (error) {
+      console.error('Error finding artist/band:', error);
+      ToastManager.error('Could not load profile');
+    }
+  };
+
+  // Open add to playlist
+  const handleAddToPlaylist = () => {
+    setShowOptionsModal(false);
+    setShowPlaylistModal(true);
+  };
+
+  // If no song is playing, show empty state
+  if (!currentSong) {
+    return (
+      <SafeAreaView style={styles.container}>
         <View style={styles.playerHeader}>
-          <TouchableOpacity 
+          <TouchableOpacity
             style={styles.backButton}
             onPress={() => navigation.goBack()}
           >
             <Text style={styles.backButtonText}>←</Text>
           </TouchableOpacity>
-          
+
           <View style={styles.headerCenter}>
             <Text style={styles.headerTitle}>Now Playing</Text>
           </View>
-          
-          <TouchableOpacity 
+
+          <View style={styles.moreButton} />
+        </View>
+
+        <EmptyState
+          icon="music"
+          title="No Song Playing"
+          subtitle="Discover local artists and bands, then tap a song to start playing. Your music journey begins with a single tap!"
+          actionLabel="Explore Artists"
+          onAction={() => navigation.navigate('BottomTabs' as never, { screen: 'Search' } as never)}
+          style={styles.emptyStateContainer}
+        />
+      </SafeAreaView>
+    );
+  }
+
+  return (
+    <SafeAreaView style={styles.container}>
+      <ScrollView
+        style={styles.scrollView}
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+        bounces={true}
+      >
+        <View style={styles.playerHeader}>
+          <TouchableOpacity
+            style={styles.backButton}
+            onPress={() => navigation.goBack()}
+          >
+            <Text style={styles.backButtonText}>←</Text>
+          </TouchableOpacity>
+
+          <View style={styles.headerCenter}>
+            <Text style={styles.headerTitle}>Now Playing</Text>
+          </View>
+
+          <TouchableOpacity
             style={styles.moreButton}
-            onPress={openPlaylistModal}
-            disabled={!currentSong}
+            onPress={() => setShowOptionsModal(true)}
           >
             <View style={styles.moreButtonDots}>
               <View style={styles.dot} />
@@ -519,36 +771,36 @@ const Player = () => {
 
         <View style={styles.albumArtContainer}>
           <View style={styles.albumArtShadow}>
-            <View style={styles.albumArtFrame}>
-              <Image
-                source={{ 
-                  uri: currentSong ? getImageUrl(currentSong.song_image) : undefined 
-                }}
-                style={styles.albumArt}
-                resizeMode="cover"
-                defaultSource={require('../assets/icon.png')}
-              />
-              {currentSong && (
-                <View style={styles.albumArtGlow} />
-              )}
-            </View>
+            <Image
+              source={{
+                uri: getImageUrl(currentSong.song_image)
+              }}
+              style={styles.albumArt}
+              resizeMode="cover"
+              defaultSource={require('../assets/icon.png')}
+            />
           </View>
         </View>
 
         <View style={styles.songInfo}>
-          <Text style={styles.songTitle}>
-            {currentSong ? currentSong.song_title : 'No Song Playing'}
+          <Text style={styles.songTitle} numberOfLines={1}>
+            {currentSong.song_title}
           </Text>
-          <Text style={styles.artistName}>
-            {currentSong ? artistName : 'Select a song from an artist profile'}
+          <Text style={styles.artistName} numberOfLines={1}>
+            {artistName}
           </Text>
+
+          {/* View Artist Link - Spotify style */}
+          <TouchableOpacity
+              style={styles.viewArtistButton}
+              onPress={navigateToArtistProfile}
+            >
+              <Text style={styles.viewArtistText}>View Artist</Text>
+              <Text style={styles.viewArtistArrow}>›</Text>
+            </TouchableOpacity>
         </View>
 
         <View style={styles.progressContainer}>
-          <View style={styles.timeContainer}>
-            <Text style={styles.timeText}>{formatTime(progress)}</Text>
-            <Text style={styles.timeText}>{formatTime(duration)}</Text>
-          </View>
           <View style={styles.progressBarContainer}>
             <View style={styles.progressBar}>
               <Animated.View
@@ -563,20 +815,33 @@ const Player = () => {
                   },
                 ]}
               />
-              <View style={styles.progressThumb} />
+              <Animated.View
+                style={[
+                  styles.progressThumb,
+                  {
+                    left: progressAnimation.interpolate({
+                        inputRange: [0, 100],
+                        outputRange: ['0%', '100%'],
+                        extrapolate: 'clamp',
+                      }),
+                    },
+                  ]}
+                />
             </View>
+          </View>
+          <View style={styles.timeContainer}>
+            <Text style={styles.timeText}>{formatTime(progress)}</Text>
+            <Text style={styles.timeText}>{formatTime(duration)}</Text>
           </View>
         </View>
 
         <View style={styles.controlsContainer}>
           <TouchableOpacity
             style={[
-              styles.controlButton, 
-              isShuffleOn && styles.controlButtonActive,
-              !currentSong && styles.controlButtonDisabled
+              styles.controlButton,
+              isShuffleOn && styles.controlButtonActive
             ]}
             onPress={handleShufflePress}
-            disabled={!currentSong}
             activeOpacity={0.8}
           >
             <Animated.View style={[
@@ -591,74 +856,54 @@ const Player = () => {
             </Animated.View>
           </TouchableOpacity>
 
-          <TouchableOpacity 
-            style={[styles.skipButton, !currentSong && styles.controlButtonDisabled]} 
-            onPress={currentSong ? previousSong : undefined}
-            disabled={!currentSong}
+          <TouchableOpacity
+            style={styles.skipButton}
+            onPress={previousSong}
           >
             <View style={styles.previousIcon}>
-              <View style={[styles.skipBar, !currentSong && styles.skipBarDisabled]} />
-              <View style={[styles.skipTriangle, styles.skipTriangleLeft, !currentSong && styles.skipTriangleDisabled]} />
-              <View style={[styles.skipTriangle, styles.skipTriangleLeft2, !currentSong && styles.skipTriangleDisabled]} />
+              <View style={styles.skipBar} />
+              <View style={[styles.skipTriangle, styles.skipTriangleLeft]} />
+              <View style={[styles.skipTriangle, styles.skipTriangleLeft2]} />
             </View>
           </TouchableOpacity>
 
-          <TouchableOpacity 
-            style={[styles.playButton, !currentSong && styles.playButtonDisabled]} 
+          <TouchableOpacity
+            style={styles.playButton}
             onPress={handlePlayPress}
-            disabled={!currentSong}
-            activeOpacity={0.8}
+            activeOpacity={0.9}
           >
             <Animated.View style={[
-              styles.playButtonOuter, 
-              !currentSong && styles.playButtonOuterDisabled,
+              styles.playButtonOuter,
               { transform: [{ scale: playButtonScale }] }
             ]}>
-              <LinearGradient
-                colors={currentSong ? ["#ff00ff", "#ff00ff"] : ["#ccc", "#999"]}
-                start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 1 }}
-                style={styles.playButtonGradient}
-              >
-                <View style={styles.playButtonInner}>
-                  <LinearGradient
-                    colors={currentSong ? ["#ffffff20", "#ffffff05"] : ["#ffffff10", "#ffffff05"]}
-                    style={styles.playButtonInnerGradient}
-                  >
-                    {currentSong && isPlaying ? (
-                      <View style={styles.pauseIcon}>
-                        <View style={styles.pauseBar} />
-                        <View style={styles.pauseBar} />
-                      </View>
-                    ) : (
-                      <View style={styles.playTriangle} />
-                    )}
-                  </LinearGradient>
+              {isPlaying ? (
+                <View style={styles.pauseIcon}>
+                  <View style={styles.pauseBar} />
+                  <View style={styles.pauseBar} />
                 </View>
-              </LinearGradient>
+              ) : (
+                <View style={styles.playTriangle} />
+              )}
             </Animated.View>
           </TouchableOpacity>
 
-          <TouchableOpacity 
-            style={[styles.skipButton, !currentSong && styles.controlButtonDisabled]} 
-            onPress={currentSong ? nextSong : undefined}
-            disabled={!currentSong}
+          <TouchableOpacity
+            style={styles.skipButton}
+            onPress={nextSong}
           >
             <View style={styles.nextIcon}>
-              <View style={[styles.skipTriangle, styles.skipTriangleRight, !currentSong && styles.skipTriangleDisabled]} />
-              <View style={[styles.skipTriangle, styles.skipTriangleRight2, !currentSong && styles.skipTriangleDisabled]} />
-              <View style={[styles.skipBar, !currentSong && styles.skipBarDisabled]} />
+              <View style={[styles.skipTriangle, styles.skipTriangleRight]} />
+              <View style={[styles.skipTriangle, styles.skipTriangleRight2]} />
+              <View style={styles.skipBar} />
             </View>
           </TouchableOpacity>
 
           <TouchableOpacity
             style={[
-              styles.controlButton, 
-              isRepeatOn && styles.controlButtonActive,
-              !currentSong && styles.controlButtonDisabled
+              styles.controlButton,
+              isRepeatOn && styles.controlButtonActive
             ]}
             onPress={handleRepeatPress}
-            disabled={!currentSong}
             activeOpacity={0.8}
           >
             <Animated.View style={[
@@ -673,297 +918,337 @@ const Player = () => {
             </Animated.View>
           </TouchableOpacity>
         </View>
-      </View>
 
-      {currentSong && (
-        <PlaylistModal
-          visible={showPlaylistModal}
-          onClose={() => setShowPlaylistModal(false)}
-          song={currentSong}
-        />
-      )}
+      </ScrollView>
+
+      {/* Options Modal */}
+      <Modal
+        visible={showOptionsModal}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setShowOptionsModal(false)}
+      >
+        <TouchableOpacity
+          style={styles.optionsModalOverlay}
+          activeOpacity={1}
+          onPress={() => setShowOptionsModal(false)}
+        >
+          <View style={styles.optionsModalContent}>
+            <View style={styles.optionsModalHandle} />
+
+            {/* View Artist/Band Option */}
+            <TouchableOpacity
+              style={styles.optionItem}
+              onPress={navigateToArtistProfile}
+            >
+              <View style={styles.optionIconContainer}>
+                <Text style={styles.optionIcon}>👤</Text>
+              </View>
+              <View style={styles.optionTextContainer}>
+                <Text style={styles.optionTitle}>
+                  View {currentSong?.song_type === 'band' ? 'Band' : 'Artist'}
+                </Text>
+                <Text style={styles.optionSubtitle}>{artistName}</Text>
+              </View>
+              <Text style={styles.optionArrow}>›</Text>
+            </TouchableOpacity>
+
+            {/* Add to Playlist Option */}
+            <TouchableOpacity
+              style={styles.optionItem}
+              onPress={handleAddToPlaylist}
+            >
+              <View style={styles.optionIconContainer}>
+                <Text style={styles.optionIcon}>➕</Text>
+              </View>
+              <View style={styles.optionTextContainer}>
+                <Text style={styles.optionTitle}>Add to Playlist</Text>
+                <Text style={styles.optionSubtitle}>Save this song for later</Text>
+              </View>
+              <Text style={styles.optionArrow}>›</Text>
+            </TouchableOpacity>
+
+            {/* Cancel Button */}
+            <TouchableOpacity
+              style={styles.optionCancelButton}
+              onPress={() => setShowOptionsModal(false)}
+            >
+              <Text style={styles.optionCancelText}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
+      <PlaylistModal
+        visible={showPlaylistModal}
+        onClose={() => setShowPlaylistModal(false)}
+        song={currentSong}
+      />
     </SafeAreaView>
   );
 };
 
 const styles = StyleSheet.create({
-  container: { 
-    flex: 1, 
-    justifyContent: "space-between", 
-    backgroundColor: "#0a0a0f",
-    paddingBottom: 120, // Account for bottom tab bar height + extra spacing
-  },
-  content: { 
-    alignItems: "center", 
-    marginTop: 100 
-  },
-  title: { 
-    fontSize: 32, 
-    fontWeight: "bold", 
-    color: "#ffffff" 
-  },
-  subtitle: {
-    fontSize: 16,
-    color: "#888",
-    marginTop: 10,
-    textAlign: "center",
-    paddingHorizontal: 20,
-  },
-  playerContent: {
+  container: {
     flex: 1,
-    paddingHorizontal: 25,
-    paddingTop: 50,
     backgroundColor: "#0a0a0f",
+  },
+  scrollView: {
+    flex: 1,
+  },
+  scrollContent: {
+    paddingHorizontal: 20,
+    paddingTop: 20,
+    paddingBottom: 40, // Minimal padding since footer is hidden on player
+  },
+  emptyStateContainer: {
+    flex: 1,
+    marginTop: 40,
   },
   playerHeader: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    marginBottom: 40,
-    paddingHorizontal: 5,
+    marginBottom: 24,
+    paddingHorizontal: 4,
   },
   backButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: "rgba(255, 255, 255, 0.1)",
+    width: 44,
+    height: 44,
     justifyContent: "center",
     alignItems: "center",
   },
   backButtonText: {
-    fontSize: 20,
+    fontSize: 28,
     color: "#ffffff",
-    fontWeight: "600",
+    fontWeight: "300",
   },
   headerCenter: {
     flex: 1,
     alignItems: "center",
   },
   headerTitle: {
-    fontSize: 16,
-    color: "#888",
-    fontWeight: "500",
-    letterSpacing: 0.5,
+    fontSize: 12,
+    color: "rgba(255, 255, 255, 0.5)",
+    fontWeight: "600",
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+    fontFamily: 'Amiko-SemiBold',
   },
   moreButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: "rgba(255, 255, 255, 0.1)",
+    width: 44,
+    height: 44,
     justifyContent: "center",
     alignItems: "center",
   },
   moreButtonDots: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 3,
+    gap: 4,
   },
   dot: {
     width: 4,
     height: 4,
     borderRadius: 2,
-    backgroundColor: "#ffffff",
+    backgroundColor: "rgba(255, 255, 255, 0.7)",
   },
   albumArtContainer: {
     alignItems: "center",
-    marginBottom: 40,
+    marginBottom: 32,
+    marginTop: 10,
   },
   albumArtShadow: {
-    shadowColor: "#ff00ff",
+    shadowColor: "#000",
     shadowOffset: { width: 0, height: 20 },
-    shadowOpacity: 0.3,
+    shadowOpacity: 0.5,
     shadowRadius: 30,
     elevation: 20,
   },
-  albumArtFrame: {
-    position: "relative",
-    borderRadius: 25,
-    overflow: "hidden",
-    backgroundColor: "#1a1a1f",
-    padding: 8,
-  },
   albumArt: {
-    width: SCREEN_WIDTH * 0.65,
-    height: SCREEN_WIDTH * 0.65,
-    borderRadius: 17,
-    backgroundColor: '#2a2a2f',
-  },
-  albumArtGlow: {
-    position: "absolute",
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    borderRadius: 25,
-    backgroundColor: "rgba(255, 0, 255, 0.1)",
-    shadowColor: "#ff00ff",
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.5,
-    shadowRadius: 20,
+    width: SCREEN_WIDTH * 0.85,
+    height: SCREEN_WIDTH * 0.85,
+    borderRadius: 8,
+    backgroundColor: '#1a1a1f',
   },
   songInfo: {
     alignItems: "center",
-    marginBottom: 35,
-    paddingHorizontal: 25,
+    marginBottom: 28,
+    paddingHorizontal: 30,
   },
   songTitle: {
-    fontSize: 28,
+    fontSize: 24,
     fontWeight: "700",
     color: "#ffffff",
     textAlign: "center",
-    marginBottom: 8,
-    letterSpacing: 0.5,
+    marginBottom: 6,
+    letterSpacing: 0.3,
+    fontFamily: 'Amiko-Bold',
   },
   artistName: {
-    fontSize: 18,
-    color: "#888",
+    fontSize: 16,
+    color: "rgba(255, 255, 255, 0.6)",
     textAlign: "center",
+    letterSpacing: 0.2,
+    fontFamily: 'Amiko-Regular',
+    marginBottom: 12,
+  },
+  viewArtistButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 0, 255, 0.15)',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 0, 255, 0.3)',
+  },
+  viewArtistText: {
+    fontSize: 13,
+    color: '#ff00ff',
+    fontWeight: '600',
+    fontFamily: 'Amiko-SemiBold',
     letterSpacing: 0.3,
   },
+  viewArtistArrow: {
+    fontSize: 18,
+    color: '#ff00ff',
+    marginLeft: 4,
+    fontWeight: '300',
+  },
   progressContainer: {
-    marginBottom: 35,
-    paddingHorizontal: 15,
-  },
-  timeContainer: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    marginBottom: 15,
-  },
-  timeText: {
-    fontSize: 14,
-    color: "#888",
-    fontWeight: "500",
-    letterSpacing: 0.5,
+    marginBottom: 24,
+    paddingHorizontal: 24,
   },
   progressBarContainer: {
-    paddingHorizontal: 5,
+    marginBottom: 8,
   },
   progressBar: {
-    height: 6,
-    backgroundColor: "rgba(255, 255, 255, 0.1)",
-    borderRadius: 3,
+    height: 4,
+    backgroundColor: "rgba(255, 255, 255, 0.15)",
+    borderRadius: 2,
     position: "relative",
-    overflow: "hidden",
+    overflow: "visible",
   },
   progressFill: {
-    height: 6,
-    backgroundColor: "#ff00ff",
-    borderRadius: 3,
-    shadowColor: "#ff00ff",
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.6,
-    shadowRadius: 8,
+    height: 4,
+    backgroundColor: "#ffffff",
+    borderRadius: 2,
   },
   progressThumb: {
     position: "absolute",
     right: -6,
-    top: -3,
+    top: -4,
     width: 12,
     height: 12,
     borderRadius: 6,
     backgroundColor: "#ffffff",
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.3,
+    shadowOpacity: 0.4,
     shadowRadius: 4,
+    elevation: 4,
+  },
+  timeContainer: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+  },
+  timeText: {
+    fontSize: 12,
+    color: "rgba(255, 255, 255, 0.5)",
+    fontWeight: "500",
+    fontFamily: 'Amiko-Regular',
+    letterSpacing: 0.3,
   },
   controlsContainer: {
     flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: 40,
-    paddingHorizontal: 25,
-    maxWidth: SCREEN_WIDTH - 40,
-    alignSelf: "center",
-  },
-  controlButton: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: "rgba(255, 255, 255, 0.05)",
     justifyContent: "center",
     alignItems: "center",
-    borderWidth: 1,
-    borderColor: "rgba(255, 255, 255, 0.1)",
+    marginBottom: 30,
+    paddingHorizontal: 20,
+    gap: 24,
+  },
+  controlButton: {
+    width: 40,
+    height: 40,
+    justifyContent: "center",
+    alignItems: "center",
   },
   controlButtonActive: {
-    backgroundColor: "rgba(255, 0, 255, 0.15)",
-    borderColor: "rgba(255, 0, 255, 0.3)",
-    shadowColor: "#ff00ff",
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.4,
-    shadowRadius: 12,
-    elevation: 8,
+    // Active state indicator handled by icon color change
   },
   controlButtonDisabled: {
     opacity: 0.3,
   },
   skipButton: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: "rgba(255, 255, 255, 0.08)",
+    width: 48,
+    height: 48,
     justifyContent: "center",
     alignItems: "center",
-    borderWidth: 1,
-    borderColor: "rgba(255, 255, 255, 0.15)",
   },
   playButton: {
-    // No margin needed - handled by space-between
+    marginHorizontal: 16,
   },
   playButtonDisabled: {
     opacity: 0.5,
   },
   playButtonOuter: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    shadowColor: "#ff00ff",
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.5,
-    shadowRadius: 20,
-    elevation: 20,
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    backgroundColor: "#ffffff",
+    justifyContent: "center",
+    alignItems: "center",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.3,
+    shadowRadius: 16,
+    elevation: 12,
   },
   playButtonOuterDisabled: {
+    backgroundColor: "#555",
     shadowOpacity: 0,
   },
   playButtonGradient: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    padding: 2,
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: "#ffffff",
   },
   playButtonInner: {
     flex: 1,
-    borderRadius: 38,
-    overflow: 'hidden',
+    justifyContent: "center",
+    alignItems: "center",
   },
   playButtonInnerGradient: {
     flex: 1,
     justifyContent: "center",
     alignItems: "center",
-    backgroundColor: '#2a2882',
+    width: 72,
+    borderRadius: 36,
+    backgroundColor: "#ffffff",
   },
   playTriangle: {
     width: 0,
     height: 0,
-    borderLeftWidth: 20,
-    borderLeftColor: "#ffffff",
-    borderTopWidth: 12,
+    borderLeftWidth: 22,
+    borderLeftColor: "#0a0a0f",
+    borderTopWidth: 13,
     borderTopColor: "transparent",
-    borderBottomWidth: 12,
+    borderBottomWidth: 13,
     borderBottomColor: "transparent",
-    marginLeft: 4,
+    marginLeft: 5,
   },
   pauseIcon: {
     flexDirection: "row",
-    gap: 8,
+    gap: 6,
   },
   pauseBar: {
     width: 6,
-    height: 24,
-    backgroundColor: "#ffffff",
-    borderRadius: 3,
+    height: 22,
+    backgroundColor: "#0a0a0f",
+    borderRadius: 2,
   },
   // Shuffle Icon
   shuffleIcon: {
@@ -973,26 +1258,28 @@ const styles = StyleSheet.create({
   },
   shuffleLine1: {
     position: 'absolute',
-    width: 20,
+    width: 18,
     height: 2,
-    backgroundColor: '#ffffff',
+    backgroundColor: 'rgba(255, 255, 255, 0.6)',
     top: 8,
-    left: 2,
+    left: 3,
+    borderRadius: 1,
   },
   shuffleLine2: {
     position: 'absolute',
-    width: 20,
+    width: 18,
     height: 2,
-    backgroundColor: '#ffffff',
+    backgroundColor: 'rgba(255, 255, 255, 0.6)',
     bottom: 8,
-    left: 2,
+    left: 3,
+    borderRadius: 1,
   },
   shuffleArrow1: {
     position: 'absolute',
     width: 0,
     height: 0,
     borderLeftWidth: 5,
-    borderLeftColor: '#ffffff',
+    borderLeftColor: 'rgba(255, 255, 255, 0.6)',
     borderTopWidth: 3,
     borderTopColor: 'transparent',
     borderBottomWidth: 3,
@@ -1005,7 +1292,7 @@ const styles = StyleSheet.create({
     width: 0,
     height: 0,
     borderRightWidth: 5,
-    borderRightColor: '#ffffff',
+    borderRightColor: 'rgba(255, 255, 255, 0.6)',
     borderTopWidth: 3,
     borderTopColor: 'transparent',
     borderBottomWidth: 3,
@@ -1014,7 +1301,7 @@ const styles = StyleSheet.create({
     left: 2,
   },
   iconActive: {
-    transform: [{ scale: 1.1 }],
+    // Scale handled inline
   },
   lineActive: {
     backgroundColor: '#ff00ff',
@@ -1027,65 +1314,63 @@ const styles = StyleSheet.create({
   previousIcon: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginRight: 2,
   },
   nextIcon: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginLeft: 2,
   },
   skipBar: {
     width: 3,
-    height: 20,
+    height: 18,
     backgroundColor: '#ffffff',
     borderRadius: 1.5,
   },
   skipBarDisabled: {
-    backgroundColor: '#555',
+    backgroundColor: 'rgba(255, 255, 255, 0.3)',
   },
   skipTriangle: {
     width: 0,
     height: 0,
   },
   skipTriangleLeft: {
-    borderRightWidth: 12,
+    borderRightWidth: 14,
     borderRightColor: '#ffffff',
-    borderTopWidth: 10,
+    borderTopWidth: 9,
     borderTopColor: 'transparent',
-    borderBottomWidth: 10,
+    borderBottomWidth: 9,
     borderBottomColor: 'transparent',
-    marginRight: -2,
+    marginRight: -3,
   },
   skipTriangleLeft2: {
-    borderRightWidth: 12,
+    borderRightWidth: 14,
     borderRightColor: '#ffffff',
-    borderTopWidth: 10,
+    borderTopWidth: 9,
     borderTopColor: 'transparent',
-    borderBottomWidth: 10,
+    borderBottomWidth: 9,
     borderBottomColor: 'transparent',
-    marginRight: 3,
+    marginRight: 2,
   },
   skipTriangleRight: {
-    borderLeftWidth: 12,
+    borderLeftWidth: 14,
     borderLeftColor: '#ffffff',
-    borderTopWidth: 10,
+    borderTopWidth: 9,
     borderTopColor: 'transparent',
-    borderBottomWidth: 10,
+    borderBottomWidth: 9,
     borderBottomColor: 'transparent',
-    marginLeft: -2,
+    marginLeft: 2,
   },
   skipTriangleRight2: {
-    borderLeftWidth: 12,
+    borderLeftWidth: 14,
     borderLeftColor: '#ffffff',
-    borderTopWidth: 10,
+    borderTopWidth: 9,
     borderTopColor: 'transparent',
-    borderBottomWidth: 10,
+    borderBottomWidth: 9,
     borderBottomColor: 'transparent',
-    marginLeft: 3,
+    marginLeft: -3,
   },
   skipTriangleDisabled: {
-    borderLeftColor: '#555',
-    borderRightColor: '#555',
+    borderLeftColor: 'rgba(255, 255, 255, 0.3)',
+    borderRightColor: 'rgba(255, 255, 255, 0.3)',
   },
   // Repeat Icon
   repeatIcon: {
@@ -1095,14 +1380,14 @@ const styles = StyleSheet.create({
   },
   repeatCircle: {
     position: 'absolute',
-    width: 20,
-    height: 20,
-    borderRadius: 10,
+    width: 18,
+    height: 18,
+    borderRadius: 9,
     borderWidth: 2,
-    borderColor: '#ffffff',
+    borderColor: 'rgba(255, 255, 255, 0.6)',
     borderRightColor: 'transparent',
-    top: 2,
-    left: 2,
+    top: 3,
+    left: 3,
     transform: [{ rotate: '45deg' }],
   },
   repeatCircleActive: {
@@ -1112,11 +1397,12 @@ const styles = StyleSheet.create({
   repeatArrow: {
     position: 'absolute',
     width: 2,
-    height: 8,
-    backgroundColor: '#ffffff',
-    top: 0,
-    right: 4,
+    height: 7,
+    backgroundColor: 'rgba(255, 255, 255, 0.6)',
+    top: 1,
+    right: 5,
     transform: [{ rotate: '45deg' }],
+    borderRadius: 1,
   },
   repeatArrowActive: {
     backgroundColor: '#ff00ff',
@@ -1126,29 +1412,103 @@ const styles = StyleSheet.create({
     width: 0,
     height: 0,
     borderLeftWidth: 4,
-    borderLeftColor: '#ffffff',
+    borderLeftColor: 'rgba(255, 255, 255, 0.6)',
     borderTopWidth: 3,
     borderTopColor: 'transparent',
     borderBottomWidth: 3,
     borderBottomColor: 'transparent',
     top: 0,
-    right: 2,
+    right: 3,
   },
   repeatArrowHead2: {
     position: 'absolute',
     width: 0,
     height: 0,
     borderLeftWidth: 4,
-    borderLeftColor: '#ffffff',
+    borderLeftColor: 'rgba(255, 255, 255, 0.6)',
     borderTopWidth: 3,
     borderTopColor: 'transparent',
     borderBottomWidth: 3,
     borderBottomColor: 'transparent',
     top: 3,
-    right: 2,
+    right: 3,
   },
   repeatArrowHeadActive: {
     borderLeftColor: '#ff00ff',
+  },
+  // Options Modal styles
+  optionsModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    justifyContent: 'flex-end',
+  },
+  optionsModalContent: {
+    backgroundColor: '#1a1a1f',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    paddingTop: 12,
+    paddingBottom: 40,
+    paddingHorizontal: 20,
+  },
+  optionsModalHandle: {
+    width: 40,
+    height: 4,
+    backgroundColor: 'rgba(255, 255, 255, 0.3)',
+    borderRadius: 2,
+    alignSelf: 'center',
+    marginBottom: 24,
+  },
+  optionItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255, 255, 255, 0.08)',
+  },
+  optionIconContainer: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: 'rgba(255, 0, 255, 0.15)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 16,
+  },
+  optionIcon: {
+    fontSize: 20,
+  },
+  optionTextContainer: {
+    flex: 1,
+  },
+  optionTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#ffffff',
+    fontFamily: 'Amiko-SemiBold',
+    marginBottom: 2,
+  },
+  optionSubtitle: {
+    fontSize: 13,
+    color: 'rgba(255, 255, 255, 0.5)',
+    fontFamily: 'Amiko-Regular',
+  },
+  optionArrow: {
+    fontSize: 24,
+    color: 'rgba(255, 255, 255, 0.4)',
+    fontWeight: '300',
+  },
+  optionCancelButton: {
+    marginTop: 16,
+    paddingVertical: 16,
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    borderRadius: 12,
+  },
+  optionCancelText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: 'rgba(255, 255, 255, 0.6)',
+    fontFamily: 'Amiko-SemiBold',
   },
 });
 

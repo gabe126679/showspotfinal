@@ -31,6 +31,9 @@ import { playlistService, Playlist } from "../services/playlistService";
 import PlaylistCreationModal from "./PlaylistCreationModal";
 import { albumService, Album, AlbumPurchase } from "../services/albumService";
 import AlbumCreationModal from "./AlbumCreationModal";
+import { useUser } from "../context/userContext";
+import AuthPromptModal from "./AuthPromptModal";
+import { tipsService, PayoutInfo } from "../services/tipsService";
 
 // Helper function to get proper image URL from Supabase storage
 const getImageUrl = (imagePath: string): string => {
@@ -123,30 +126,32 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
   const navigation = useNavigation();
   const router = useRouter();
   const { playSong } = useMusicPlayer();
+  const { isGuest, user } = useUser();
+  const [showAuthPrompt, setShowAuthPrompt] = useState(false);
 
-  // Profile type state
+  // Profile type state - ALL HOOKS MUST BE CALLED BEFORE ANY CONDITIONAL RETURNS
   const [activeProfile, setActiveProfile] = useState<ProfileType>('spotter');
-  
+
   // Image swiping state
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
-  
+
   // Common states
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState(false);
-  
+
   // Full-screen image modal
   const [showImageModal, setShowImageModal] = useState(false);
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const [selectedImageIndex, setSelectedImageIndex] = useState<number>(0);
-  
+
   // QR code modal
   const [showQRModal, setShowQRModal] = useState(false);
   const [selectedTicket, setSelectedTicket] = useState<TicketWithShow | null>(null);
 
   // Playlist creation modal
   const [showPlaylistModal, setShowPlaylistModal] = useState(false);
-  
+
   // Album creation modal
   const [showAlbumModal, setShowAlbumModal] = useState(false);
   
@@ -229,8 +234,9 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
   // Rating data
   const [averageRating, setAverageRating] = useState<number | null>(null);
   
-  // Cashout data
+  // Cashout/Payout data with breakdown
   const [cashoutAmount, setCashoutAmount] = useState<number>(0);
+  const [payoutBreakdown, setPayoutBreakdown] = useState<PayoutInfo | null>(null);
 
   // Animation refs
   const panelTranslateY = useRef(new Animated.Value(COLLAPSED_TRANSLATE_Y)).current;
@@ -681,43 +687,54 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
     }
   };
 
-  // Fetch cashout amounts from payouts table
+  // Fetch cashout amounts with breakdown from payouts table
   const fetchCashoutAmount = async (entityId: string, entityType: 'artist' | 'venue') => {
     try {
       console.log(`💰 Fetching cashout amount for ${entityType}:`, entityId);
-      
-      // Get all payouts for this entity using correct column names
-      const { data: payouts, error } = await supabase
-        .from('payouts')
-        .select('amount')
-        .eq('recipient_id', entityId)
-        .eq('recipient_type', entityType);
 
-      if (error) {
-        console.error('Error fetching cashout amount:', error);
-        setCashoutAmount(0);
-        return;
-      }
+      // Use tipsService to get full payout breakdown
+      const result = await tipsService.getEntityPayouts(entityId, entityType);
 
-      if (payouts && payouts.length > 0) {
-        // Calculate total cashout amount
-        const total = payouts.reduce((sum, payout) => {
-          // Convert amount to number (it's stored as numeric in DB)
-          const numericAmount = typeof payout.amount === 'string' 
-            ? parseFloat(payout.amount.replace('$', '')) || 0
-            : payout.amount || 0;
-          return sum + numericAmount;
-        }, 0);
-        
-        setCashoutAmount(total);
-        console.log(`💰 Total cashout amount: $${total}`);
+      if (result.success && result.data) {
+        const breakdown = result.data;
+        setCashoutAmount(breakdown.totalAmount);
+        setPayoutBreakdown(breakdown);
+        console.log(`💰 Payout breakdown:`, breakdown);
       } else {
-        setCashoutAmount(0);
-        console.log('💰 No cashouts found');
+        // Fallback to direct query if RPC fails
+        const { data: payouts, error } = await supabase
+          .from('payouts')
+          .select('amount')
+          .eq('recipient_id', entityId)
+          .eq('recipient_type', entityType);
+
+        if (error) {
+          console.error('Error fetching cashout amount:', error);
+          setCashoutAmount(0);
+          setPayoutBreakdown(null);
+          return;
+        }
+
+        if (payouts && payouts.length > 0) {
+          const total = payouts.reduce((sum, payout) => {
+            const numericAmount = typeof payout.amount === 'string'
+              ? parseFloat(payout.amount.replace('$', '')) || 0
+              : payout.amount || 0;
+            return sum + numericAmount;
+          }, 0);
+
+          setCashoutAmount(total);
+          console.log(`💰 Total cashout amount: $${total}`);
+        } else {
+          setCashoutAmount(0);
+          setPayoutBreakdown(null);
+          console.log('💰 No cashouts found');
+        }
       }
     } catch (error) {
       console.error('Error in fetchCashoutAmount:', error);
       setCashoutAmount(0);
+      setPayoutBreakdown(null);
     }
   };
 
@@ -1134,6 +1151,50 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
       };
     }
   };
+
+  // If user is a guest, show the auth prompt (AFTER all hooks are called)
+  if (isGuest || !user) {
+    return (
+      <LinearGradient
+        colors={['#0a0a0f', '#1a1035', '#0a0a0f']}
+        locations={[0, 0.5, 1]}
+        style={guestStyles.container}
+      >
+        <SafeAreaView style={guestStyles.safeArea}>
+          <View style={guestStyles.content}>
+            <View style={guestStyles.iconContainer}>
+              <Text style={guestStyles.icon}>{"👤"}</Text>
+            </View>
+            <Text style={guestStyles.title}>Your Profile Awaits</Text>
+            <Text style={guestStyles.subtitle}>
+              Create an account to build your profile, save your favorite artists, track your shows, and more.
+            </Text>
+            <TouchableOpacity
+              style={guestStyles.signUpButton}
+              onPress={() => navigation.navigate('Signup' as never)}
+            >
+              <LinearGradient
+                colors={['#ff00ff', '#8b00ff', '#2a2882']}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+                style={guestStyles.signUpGradient}
+              >
+                <Text style={guestStyles.signUpText}>Create Account</Text>
+              </LinearGradient>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={guestStyles.loginButton}
+              onPress={() => navigation.navigate('Login' as never)}
+            >
+              <Text style={guestStyles.loginText}>
+                Already have an account? <Text style={guestStyles.loginLink}>Log In</Text>
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </SafeAreaView>
+      </LinearGradient>
+    );
+  }
 
   // Render loading state
   if (loading) {
@@ -2102,9 +2163,35 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
                             <Text style={styles.infoLabel}>Bio:</Text>
                             <Text style={styles.infoValue}>{artistData?.artist_bio || 'No bio available'}</Text>
                           </View>
-                          <View style={styles.infoRow}>
-                            <Text style={styles.infoLabel}>Total Cashouts:</Text>
-                            <Text style={styles.cashoutAmount}>${cashoutAmount.toFixed(2)}</Text>
+
+                          {/* Payout Summary Card */}
+                          <View style={styles.payoutCard}>
+                            <Text style={styles.payoutCardTitle}>Earnings Summary</Text>
+                            <View style={styles.payoutTotalRow}>
+                              <Text style={styles.payoutTotalLabel}>Total Payout:</Text>
+                              <Text style={styles.cashoutAmount}>${cashoutAmount.toFixed(2)}</Text>
+                            </View>
+                            {payoutBreakdown && (
+                              <View style={styles.payoutBreakdown}>
+                                <View style={styles.payoutBreakdownRow}>
+                                  <Text style={styles.payoutBreakdownLabel}>Tips</Text>
+                                  <Text style={styles.payoutBreakdownValue}>${payoutBreakdown.tipTotal.toFixed(2)}</Text>
+                                </View>
+                                <View style={styles.payoutBreakdownRow}>
+                                  <Text style={styles.payoutBreakdownLabel}>Shows</Text>
+                                  <Text style={styles.payoutBreakdownValue}>${payoutBreakdown.showTotal.toFixed(2)}</Text>
+                                </View>
+                                <View style={styles.payoutBreakdownRow}>
+                                  <Text style={styles.payoutBreakdownLabel}>Song Sales</Text>
+                                  <Text style={styles.payoutBreakdownValue}>${payoutBreakdown.songTotal.toFixed(2)}</Text>
+                                </View>
+                                <View style={styles.payoutBreakdownRow}>
+                                  <Text style={styles.payoutBreakdownLabel}>Album Sales</Text>
+                                  <Text style={styles.payoutBreakdownValue}>${payoutBreakdown.albumTotal.toFixed(2)}</Text>
+                                </View>
+                              </View>
+                            )}
+                            <Text style={styles.payoutDisclaimer}>Cashout coming soon in beta</Text>
                           </View>
                         </>
                       ) : activeProfile === 'venue' ? (
@@ -2125,9 +2212,27 @@ const Profile: React.FC<ProfileProps> = ({ onExpandPanelRef, onProfileDataChange
                             <Text style={styles.infoLabel}>Description:</Text>
                             <Text style={styles.infoValue}>{venueData?.venue_description || 'No description available'}</Text>
                           </View>
-                          <View style={styles.infoRow}>
-                            <Text style={styles.infoLabel}>Total Cashouts:</Text>
-                            <Text style={styles.cashoutAmount}>${cashoutAmount.toFixed(2)}</Text>
+
+                          {/* Payout Summary Card for Venues */}
+                          <View style={styles.payoutCard}>
+                            <Text style={styles.payoutCardTitle}>Earnings Summary</Text>
+                            <View style={styles.payoutTotalRow}>
+                              <Text style={styles.payoutTotalLabel}>Total Payout:</Text>
+                              <Text style={styles.cashoutAmount}>${cashoutAmount.toFixed(2)}</Text>
+                            </View>
+                            {payoutBreakdown && (
+                              <View style={styles.payoutBreakdown}>
+                                <View style={styles.payoutBreakdownRow}>
+                                  <Text style={styles.payoutBreakdownLabel}>Show Profits</Text>
+                                  <Text style={styles.payoutBreakdownValue}>${payoutBreakdown.showTotal.toFixed(2)}</Text>
+                                </View>
+                                <View style={styles.payoutBreakdownRow}>
+                                  <Text style={styles.payoutBreakdownLabel}>Tips</Text>
+                                  <Text style={styles.payoutBreakdownValue}>${payoutBreakdown.tipTotal.toFixed(2)}</Text>
+                                </View>
+                              </View>
+                            )}
+                            <Text style={styles.payoutDisclaimer}>Cashout coming soon in beta</Text>
                           </View>
                         </>
                       ) : (
@@ -2769,68 +2874,93 @@ const styles = StyleSheet.create({
   },
   tabContainer: {
     backgroundColor: "#fff",
+    marginBottom: 2,
   },
   dropdownTab: {
     height: TAB_HEIGHT,
-    borderBottomWidth: 1,
-    borderColor: "#f0f0f0",
+    borderBottomWidth: 0,
+    borderColor: "transparent",
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
     paddingHorizontal: 20,
+    paddingVertical: 12,
     backgroundColor: "#fff",
+    marginHorizontal: 12,
+    marginVertical: 4,
+    borderRadius: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 3,
+    elevation: 1,
   },
   dropdownTabExpanded: {
-    backgroundColor: "#f8f8f8",
-    borderBottomColor: "#ff00ff",
+    backgroundColor: "rgba(42, 40, 130, 0.08)",
+    borderLeftWidth: 3,
+    borderLeftColor: "#ff00ff",
   },
   lastTab: {
     borderBottomWidth: 0,
   },
   dropdownText: {
-    fontSize: 18,
+    fontSize: 16,
     fontFamily: "Amiko-Regular",
-    color: "#333",
+    color: "#2a2882",
     textTransform: "capitalize",
-    fontWeight: "500",
+    fontWeight: "600",
+    letterSpacing: 0.3,
   },
   arrow: {
-    fontSize: 16,
+    fontSize: 14,
     color: "#ff00ff",
     fontWeight: "bold",
+    width: 24,
+    height: 24,
+    textAlign: 'center',
+    lineHeight: 24,
+    backgroundColor: 'rgba(255, 0, 255, 0.1)',
+    borderRadius: 12,
+    overflow: 'hidden',
   },
   tabContent: {
-    backgroundColor: "#f8f8f8",
-    padding: 20,
-    borderBottomWidth: 1,
-    borderBottomColor: "#f0f0f0",
+    backgroundColor: "#fafafa",
+    padding: 16,
+    marginHorizontal: 12,
+    marginBottom: 8,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(42, 40, 130, 0.1)',
   },
   tabContentText: {
-    fontSize: 16,
+    fontSize: 14,
     fontFamily: "Amiko-Regular",
-    color: "#666",
+    color: "#888",
     textAlign: "center",
     fontStyle: "italic",
   },
   // Info content styles
   infoContent: {
-    paddingVertical: 10,
+    paddingVertical: 8,
   },
   infoRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 8,
-    paddingHorizontal: 5,
-    borderBottomWidth: 1,
-    borderBottomColor: '#f0f0f0',
+    alignItems: 'flex-start',
+    paddingVertical: 12,
+    paddingHorizontal: 8,
+    backgroundColor: 'rgba(255, 255, 255, 0.7)',
+    borderRadius: 8,
+    marginBottom: 8,
   },
   infoLabel: {
-    fontSize: 14,
+    fontSize: 13,
     fontFamily: 'Amiko-Regular',
-    color: '#666',
-    fontWeight: '600',
+    color: '#2a2882',
+    fontWeight: '700',
     flex: 1,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
   },
   infoValue: {
     fontSize: 14,
@@ -2838,15 +2968,71 @@ const styles = StyleSheet.create({
     color: '#333',
     flex: 2,
     textAlign: 'right',
+    lineHeight: 20,
   },
   cashoutAmount: {
-    fontSize: 16,
+    fontSize: 20,
     fontFamily: 'Amiko-Regular',
     color: '#28a745',
     fontWeight: '700',
-    flex: 2,
-    textAlign: 'right',
   },
+
+  // Payout Card Styles
+  payoutCard: {
+    backgroundColor: 'rgba(42, 40, 130, 0.15)',
+    borderRadius: 12,
+    padding: 16,
+    marginTop: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 0, 255, 0.2)',
+  },
+  payoutCardTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#2a2882',
+    marginBottom: 12,
+    textAlign: 'center',
+  },
+  payoutTotalRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(0, 0, 0, 0.1)',
+    marginBottom: 8,
+  },
+  payoutTotalLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#333',
+  },
+  payoutBreakdown: {
+    marginTop: 8,
+  },
+  payoutBreakdownRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 4,
+  },
+  payoutBreakdownLabel: {
+    fontSize: 13,
+    color: '#666',
+  },
+  payoutBreakdownValue: {
+    fontSize: 13,
+    fontWeight: '500',
+    color: '#333',
+  },
+  payoutDisclaimer: {
+    fontSize: 11,
+    color: '#999',
+    fontStyle: 'italic',
+    textAlign: 'center',
+    marginTop: 12,
+  },
+
   addButton: {
     backgroundColor: "#ff00ff",
     paddingVertical: 10,
@@ -2908,16 +3094,18 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingVertical: 12,
-    paddingHorizontal: 15,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
     backgroundColor: '#fff',
-    marginBottom: 8,
-    borderRadius: 8,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 2,
-    elevation: 2,
+    marginBottom: 10,
+    borderRadius: 12,
+    borderLeftWidth: 3,
+    borderLeftColor: '#ff00ff',
+    shadowColor: '#2a2882',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 4,
+    elevation: 3,
   },
   songInfo: {
     flex: 1,
@@ -3184,16 +3372,18 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingVertical: 12,
-    paddingHorizontal: 15,
-    backgroundColor: '#f8f9fa',
-    marginBottom: 8,
-    borderRadius: 8,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 2,
-    elevation: 2,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    backgroundColor: '#fff',
+    marginBottom: 10,
+    borderRadius: 12,
+    borderLeftWidth: 3,
+    borderLeftColor: '#2a2882',
+    shadowColor: '#2a2882',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 4,
+    elevation: 3,
   },
   showInfo: {
     flex: 1,
@@ -3539,6 +3729,87 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: 'bold',
     textAlign: 'center',
+  },
+});
+
+// Guest profile styles
+const guestStyles = StyleSheet.create({
+  container: {
+    flex: 1,
+  },
+  safeArea: {
+    flex: 1,
+  },
+  content: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 32,
+  },
+  iconContainer: {
+    width: 120,
+    height: 120,
+    borderRadius: 60,
+    backgroundColor: 'rgba(255, 0, 255, 0.1)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 24,
+    borderWidth: 2,
+    borderColor: 'rgba(255, 0, 255, 0.3)',
+  },
+  icon: {
+    fontSize: 50,
+  },
+  title: {
+    fontSize: 28,
+    fontFamily: 'Audiowide-Regular',
+    color: '#ffffff',
+    textAlign: 'center',
+    marginBottom: 12,
+    textShadowColor: '#ff00ff',
+    textShadowOffset: { width: 0, height: 0 },
+    textShadowRadius: 10,
+  },
+  subtitle: {
+    fontSize: 16,
+    fontFamily: 'Amiko-Regular',
+    color: 'rgba(255, 255, 255, 0.7)',
+    textAlign: 'center',
+    lineHeight: 24,
+    marginBottom: 32,
+  },
+  signUpButton: {
+    width: '100%',
+    marginBottom: 16,
+  },
+  signUpGradient: {
+    height: 52,
+    borderRadius: 14,
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: '#ff00ff',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.4,
+    shadowRadius: 12,
+    elevation: 8,
+  },
+  signUpText: {
+    fontSize: 17,
+    fontFamily: 'Amiko-Bold',
+    color: '#ffffff',
+    letterSpacing: 0.5,
+  },
+  loginButton: {
+    paddingVertical: 12,
+  },
+  loginText: {
+    fontSize: 15,
+    fontFamily: 'Amiko-Regular',
+    color: 'rgba(255, 255, 255, 0.7)',
+  },
+  loginLink: {
+    color: '#ff00ff',
+    fontFamily: 'Amiko-Bold',
   },
 });
 

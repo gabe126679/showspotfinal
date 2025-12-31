@@ -18,6 +18,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useNavigation } from "@react-navigation/native";
 import { LinearGradient } from "expo-linear-gradient";
 import { supabase } from "../lib/supabase";
+import EmptyState from "./EmptyState";
 
 const { width: SCREEN_WIDTH } = Dimensions.get("window");
 
@@ -367,13 +368,15 @@ const Search = () => {
                 {searchResults.map(renderSearchResult)}
               </>
             ) : (
-              <View style={styles.noResultsContainer}>
-                <Text style={styles.noResultsEmoji}>🎭</Text>
-                <Text style={styles.noResultsText}>No results found</Text>
-                <Text style={styles.noResultsSubtext}>
-                  Try adjusting your search or explore different categories
-                </Text>
-              </View>
+              <EmptyState
+                icon="search"
+                title="No Results Found"
+                subtitle={`We couldn't find anything matching "${searchQuery}". Try adjusting your search or explore different categories.`}
+                actionLabel="Clear Search"
+                onAction={clearSearch}
+                compact
+                style={styles.emptyStateContainer}
+              />
             )
           ) : (
             <View style={styles.tipsContainer}>
@@ -581,27 +584,9 @@ const styles = StyleSheet.create({
     color: '#ccc',
     marginLeft: 10,
   },
-  noResultsContainer: {
-    alignItems: 'center',
-    paddingTop: 100,
-  },
-  noResultsEmoji: {
-    fontSize: 64,
-    marginBottom: 20,
-  },
-  noResultsText: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: '#333',
-    marginBottom: 10,
-    fontFamily: 'Amiko-Regular',
-  },
-  noResultsSubtext: {
-    fontSize: 16,
-    color: '#666',
-    textAlign: 'center',
-    paddingHorizontal: 40,
-    fontFamily: 'Amiko-Regular',
+  emptyStateContainer: {
+    paddingTop: 40,
+    paddingBottom: 40,
   },
   tipsContainer: {
     marginTop: 20,

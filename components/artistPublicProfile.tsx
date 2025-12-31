@@ -14,9 +14,9 @@ import {
   Platform,
   Vibration,
   Modal,
-  Alert,
 } from "react-native";
-import { PanGestureHandler, State } from 'react-native-gesture-handler';
+// No longer needed - using TouchableOpacity for collapse arrow
+// import { PanGestureHandler, State } from 'react-native-gesture-handler';
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useNavigation, CommonActions } from "@react-navigation/native";
 import { useRouter } from "expo-router";
@@ -27,6 +27,7 @@ import ShowSpotHeader from "./ShowSpotHeader";
 import TicketPurchaseModal from "./TicketPurchaseModal";
 import SongPurchaseModal from "./SongPurchaseModal";
 import AlbumPurchaseModal from "./AlbumPurchaseModal";
+import { ToastManager } from './Toast';
 import ShowVoteButton from "./ShowVoteButton";
 import { backlinesService } from "../services/backlinesService";
 import RatingModal from "./RatingModal";
@@ -39,6 +40,14 @@ import { albumService, Album } from '../services/albumService';
 import AlbumImageUploadModal from './AlbumImageUploadModal';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get("window");
+
+// Responsive dimensions for iPhone 16+ and other modern devices
+const DIMS = {
+  GESTURE_THRESHOLD: Math.max(50, SCREEN_HEIGHT * 0.06),
+  SWIPE_VELOCITY_THRESHOLD: 0.5,
+  PANEL_HEADER_HEIGHT: Math.max(65, SCREEN_HEIGHT * 0.08),
+  ACTION_BUTTON_SIZE: Math.max(50, SCREEN_WIDTH * 0.12),
+};
 // iPhone 16 specific dimensions for gesture positioning - matching profile.tsx exactly
 const IPHONE_16_HEIGHT = 852; // iPhone 16 screen height
 const ACTUAL_TAB_BAR_HEIGHT = 85; // Bottom tab bar height
@@ -47,10 +56,10 @@ const HEADER_HEIGHT = 85;
 const FOOTER_HEIGHT = 85;
 const HANDLE_HEIGHT = 30;
 const TAB_HEIGHT = 80;
-const COLLAPSED_HEIGHT = 180;
+const COLLAPSED_HEIGHT = 250; // Moved up 50px per user request
 const COLLAPSED_TRANSLATE_Y = SCREEN_HEIGHT - COLLAPSED_HEIGHT - FOOTER_HEIGHT;
-// Optimized height for iPhone 16 - focus on images as primary visual  
-const IMAGE_SECTION_HEIGHT = 610; // Matching bandPublicProfile exactly
+// Optimized height for iPhone 16 - focus on images as primary visual
+const IMAGE_SECTION_HEIGHT = 610;
 
 interface Song {
   song_id: string;
@@ -151,6 +160,12 @@ const ArtistPublicProfile: React.FC<ArtistPublicProfileProps> = ({ route }) => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState(false);
+
+  // Ref to track expanded state for panResponder (avoids stale closure)
+  const expandedRef = useRef(false);
+
+  // Simple gesture state tracking
+  const [scrollY, setScrollY] = useState(0);
   
   // Modal states
   const [showTicketModal, setShowTicketModal] = useState(false);
@@ -258,44 +273,47 @@ const ArtistPublicProfile: React.FC<ArtistPublicProfileProps> = ({ route }) => {
   const nameOpacity = useRef(new Animated.Value(1)).current;
   const fadeAnim = useRef(new Animated.Value(0)).current;
 
-  // Pan responder for swipe up gesture - matching bandPublicProfile.tsx exactly
+  // Simple pan responder - ONLY active when panel is collapsed
+  // Uses expandedRef to avoid stale closure issues
   const panResponder = useRef(
     PanResponder.create({
-      onStartShouldSetPanResponder: () => true,
+      onStartShouldSetPanResponder: () => {
+        // Never capture when expanded - let ScrollViews handle everything
+        return !expandedRef.current;
+      },
       onMoveShouldSetPanResponder: (_, gestureState) => {
-        return Math.abs(gestureState.dy) > 10;
+        // Double-check: never respond when expanded, only upward swipes when collapsed
+        if (expandedRef.current) return false;
+        return gestureState.dy < -10 && Math.abs(gestureState.dy) > Math.abs(gestureState.dx);
       },
       onPanResponderGrant: () => {
-        if (Platform.OS === 'ios') {
-          Vibration.vibrate(10);
-        }
+        // No vibration - less annoying for users
       },
       onPanResponderMove: (_, gestureState) => {
-        if (!expanded && gestureState.dy < 0) {
-          // Only allow upward movement when collapsed
-          const currentValue = expanded ? 0 : COLLAPSED_TRANSLATE_Y;
+        // Only move if collapsed
+        if (!expandedRef.current && gestureState.dy < 0) {
+          const currentValue = COLLAPSED_TRANSLATE_Y;
           const newValue = currentValue + gestureState.dy;
           const constrainedValue = Math.max(0, Math.min(COLLAPSED_TRANSLATE_Y, newValue));
           panelTranslateY.setValue(constrainedValue);
         }
       },
       onPanResponderRelease: (_, gestureState) => {
-        const SWIPE_THRESHOLD = 100;
-        const shouldExpand = !expanded && (gestureState.dy < -SWIPE_THRESHOLD || gestureState.vy < -0.5);
-        const shouldCollapse = expanded && (gestureState.dy > SWIPE_THRESHOLD || gestureState.vy > 0.5);
+        // Only handle release if collapsed
+        if (!expandedRef.current) {
+          const shouldExpand = gestureState.dy < -50 || gestureState.vy < -0.5;
 
-        if (shouldExpand) {
-          expandPanel();
-        } else if (shouldCollapse) {
-          collapsePanel();
-        } else {
-          const targetValue = expanded ? 0 : COLLAPSED_TRANSLATE_Y;
-          Animated.spring(panelTranslateY, {
-            toValue: targetValue,
-            useNativeDriver: true,
-            tension: 100,
-            friction: 8,
-          }).start();
+          if (shouldExpand) {
+            expandPanel();
+          } else {
+            // Snap back to collapsed position
+            Animated.spring(panelTranslateY, {
+              toValue: COLLAPSED_TRANSLATE_Y,
+              useNativeDriver: true,
+              tension: 100,
+              friction: 8,
+            }).start();
+          }
         }
       },
     })
@@ -303,13 +321,14 @@ const ArtistPublicProfile: React.FC<ArtistPublicProfileProps> = ({ route }) => {
 
   const expandPanel = useCallback(() => {
     setExpanded(true);
-    
+    expandedRef.current = true; // Keep ref in sync
+
     Animated.parallel([
       Animated.spring(panelTranslateY, {
         toValue: 0,
         useNativeDriver: true,
         tension: 120,
-        friction: 7,
+        friction: 8,
         overshootClamping: false,
       }),
       Animated.timing(handleOpacity, {
@@ -327,19 +346,20 @@ const ArtistPublicProfile: React.FC<ArtistPublicProfileProps> = ({ route }) => {
 
   const collapsePanel = useCallback(() => {
     setExpanded(false);
-    
+    expandedRef.current = false; // Keep ref in sync
+
     // Collapse all tabs when panel closes
-    setTabs(prevTabs => 
+    setTabs(prevTabs =>
       prevTabs.map(tab => ({ ...tab, expanded: false }))
     );
-    
+
     Animated.parallel([
       Animated.spring(panelTranslateY, {
         toValue: COLLAPSED_TRANSLATE_Y,
         useNativeDriver: true,
         tension: 110,
         friction: 8,
-        overshootClamping: false,
+        overshootClamping: true, // Prevent overshoot for consistent positioning
       }),
       Animated.timing(handleOpacity, {
         toValue: 1,
@@ -354,24 +374,15 @@ const ArtistPublicProfile: React.FC<ArtistPublicProfileProps> = ({ route }) => {
     ]).start();
   }, [panelTranslateY, handleOpacity, nameOpacity]);
 
-  // Gesture handler for panel header swipe down - matching bandPublicProfile.tsx exactly
-  const handlePanelGesture = useCallback((event: any) => {
-    const { nativeEvent } = event;
-    
-    if (nativeEvent.state === State.END) {
-      const { translationY, velocityY } = nativeEvent;
-      
-      // Only allow swipe down when panel is expanded
-      if (expanded && (translationY > 50 || velocityY > 300)) {
-        collapsePanel();
-      }
+  // Handle arrow click to collapse panel
+  const handleCollapseArrowPress = useCallback(() => {
+    if (expanded) {
+      collapsePanel();
     }
   }, [expanded, collapsePanel]);
 
   const toggleTab = useCallback((tabId: string) => {
-    if (Platform.OS === 'ios') {
-      Vibration.vibrate(10);
-    }
+    // No vibration - smoother user experience
     
     setTabs(prevTabs => 
       prevTabs.map(tab => ({
@@ -396,7 +407,7 @@ const ArtistPublicProfile: React.FC<ArtistPublicProfileProps> = ({ route }) => {
   // Handle rating button press
   const handleRatingPress = () => {
     if (!currentUser) {
-      Alert.alert('Not Logged In', 'Please log in to rate this artist.');
+      ToastManager.error('Please log in to rate this artist');
       return;
     }
     setShowRatingModal(true);
@@ -456,7 +467,7 @@ const ArtistPublicProfile: React.FC<ArtistPublicProfileProps> = ({ route }) => {
   // Handle follow button press
   const handleFollowPress = async () => {
     if (!currentUser) {
-      Alert.alert('Not Logged In', 'Please log in to follow this artist.');
+      ToastManager.error('Please log in to follow this artist');
       return;
     }
 
@@ -466,11 +477,11 @@ const ArtistPublicProfile: React.FC<ArtistPublicProfileProps> = ({ route }) => {
         setFollowerInfo(result.data);
         setIsFollowing(result.data.userIsFollowing);
       } else {
-        Alert.alert('Error', result.error || 'Failed to update follow status');
+        ToastManager.error(result.error || 'Failed to update follow status');
       }
     } catch (error) {
       console.error('Error toggling follow:', error);
-      Alert.alert('Error', 'Failed to update follow status');
+      ToastManager.error('Failed to update follow status');
     }
   };
 
@@ -497,26 +508,47 @@ const ArtistPublicProfile: React.FC<ArtistPublicProfileProps> = ({ route }) => {
         setIsOwner(userArtistIds.includes(artist_id));
       }
 
-      // Get artist data
-      const { data: artist, error: artistError } = await supabase
+      // Get artist data - try by artist_id first, then by spotter_id as fallback
+      // (Some songs may store spotter_id in the artist_id field)
+      let { data: artist, error: artistError } = await supabase
         .from('artists')
         .select('*')
         .eq('artist_id', artist_id)
-        .single();
+        .maybeSingle();
 
       if (artistError) {
         throw new Error(`Failed to fetch artist: ${artistError.message}`);
       }
 
-      if (artist) {
-        setArtistData(artist);
+      // If not found by artist_id, try finding by spotter_id
+      if (!artist) {
+        console.log('Artist not found by artist_id, trying spotter_id...');
+        const { data: artistBySpotter, error: spotterError } = await supabase
+          .from('artists')
+          .select('*')
+          .eq('spotter_id', artist_id)
+          .maybeSingle();
+
+        if (spotterError) {
+          throw new Error(`Failed to fetch artist: ${spotterError.message}`);
+        }
+
+        artist = artistBySpotter;
       }
+
+      if (!artist) {
+        throw new Error('Artist not found');
+      }
+
+      // Update the artist_id to use the actual artist record ID for subsequent queries
+      const actualArtistId = artist.artist_id;
+      setArtistData(artist);
 
       // Get artist-specific songs (only show active approved artist songs, NOT band songs)
       let songsQuery = supabase
         .from('songs')
         .select('*')
-        .eq('artist_id', artist_id)
+        .eq('artist_id', actualArtistId)
         .eq('song_type', 'artist')
         .eq('song_status', 'active')
         .eq('song_approved', true)
@@ -534,8 +566,8 @@ const ArtistPublicProfile: React.FC<ArtistPublicProfileProps> = ({ route }) => {
         // Additional filtering to ensure we only get true artist songs
         const filteredSongs = artistSongs.filter(song => {
           const isValidArtistSong = (
-            song.song_type === 'artist' && 
-            song.artist_id === artist_id &&
+            song.song_type === 'artist' &&
+            song.artist_id === actualArtistId &&
             song.band_id === null // Ensure no band_id for artist songs
           );
           
@@ -545,7 +577,7 @@ const ArtistPublicProfile: React.FC<ArtistPublicProfileProps> = ({ route }) => {
               song_type: song.song_type,
               artist_id: song.artist_id,
               band_id: song.band_id,
-              expected_artist_id: artist_id
+              expected_artist_id: actualArtistId
             });
           }
           
@@ -567,22 +599,22 @@ const ArtistPublicProfile: React.FC<ArtistPublicProfileProps> = ({ route }) => {
       }
 
       // Fetch shows where this artist is a member
-      await fetchArtistShows(artist_id);
-      
+      await fetchArtistShows(actualArtistId);
+
       // Fetch albums for this artist
-      await fetchArtistAlbums(artist_id);
-      
+      await fetchArtistAlbums(actualArtistId);
+
       // Fetch bands this artist is a member of
-      await fetchArtistBands(artist_id);
+      await fetchArtistBands(actualArtistId);
 
       // Fetch rating info for this artist
-      await fetchRatingInfo(artist_id, session?.user?.id);
+      await fetchRatingInfo(actualArtistId, session?.user?.id);
 
       // Fetch follower info for this artist
-      await fetchFollowerInfo(artist_id, session?.user?.id);
+      await fetchFollowerInfo(actualArtistId, session?.user?.id);
       
       // Fetch backlining shows for this artist
-      await fetchBackliningShows(artist_id);
+      await fetchBackliningShows(actualArtistId);
 
       // Fade in animation - matching bandPublicProfile.tsx
       Animated.timing(fadeAnim, {
@@ -827,12 +859,13 @@ const ArtistPublicProfile: React.FC<ArtistPublicProfileProps> = ({ route }) => {
 
   // Get current artist data for display
   const getCurrentArtistData = () => {
-    if (!artistData) return { name: "Artist", images: [] };
-    
+    if (!artistData) return { id: artist_id, name: "Artist", images: [] };
+
     return {
+      id: artistData.artist_id || artist_id,
       name: artistData.artist_name,
       images: [
-        artistData.artist_profile_image, 
+        artistData.artist_profile_image,
         ...(artistData.artist_secondary_images || [])
       ].filter(Boolean),
     };
@@ -1051,6 +1084,7 @@ const ArtistPublicProfile: React.FC<ArtistPublicProfileProps> = ({ route }) => {
               style={styles.showsContainer}
               showsVerticalScrollIndicator={false}
               nestedScrollEnabled={true}
+              bounces={true}
             >
               {activeShows.length > 0 ? (
                 activeShows.map((show) => (
@@ -1112,6 +1146,7 @@ const ArtistPublicProfile: React.FC<ArtistPublicProfileProps> = ({ route }) => {
               style={styles.showsContainer}
               showsVerticalScrollIndicator={false}
               nestedScrollEnabled={true}
+              bounces={true}
             >
               {pendingShows.length > 0 ? (
                 pendingShows.map((show) => (
@@ -1163,6 +1198,7 @@ const ArtistPublicProfile: React.FC<ArtistPublicProfileProps> = ({ route }) => {
               style={styles.showsContainer}
               showsVerticalScrollIndicator={false}
               nestedScrollEnabled={true}
+              bounces={true}
             >
               {performedShows.length > 0 ? (
                 performedShows.map((show) => (
@@ -1252,7 +1288,11 @@ const ArtistPublicProfile: React.FC<ArtistPublicProfileProps> = ({ route }) => {
         return (
           <View style={styles.tabContent}>
             {backliningShows.length > 0 ? (
-              <ScrollView showsVerticalScrollIndicator={false} nestedScrollEnabled={true}>
+              <ScrollView 
+                showsVerticalScrollIndicator={false} 
+                nestedScrollEnabled={true}
+                bounces={true}
+              >
                 {backliningShows.map((show, index) => (
                   <TouchableOpacity
                     key={show.show_id}
@@ -1395,6 +1435,7 @@ const ArtistPublicProfile: React.FC<ArtistPublicProfileProps> = ({ route }) => {
     <View style={styles.container}>
       <StatusBar barStyle="light-content" backgroundColor="#2a2882" />
       
+      
       {/* Header */}
       <View style={styles.headerContainer}>
         <ShowSpotHeader 
@@ -1409,8 +1450,8 @@ const ArtistPublicProfile: React.FC<ArtistPublicProfileProps> = ({ route }) => {
         />
       </View>
 
-      {/* Main content area with fixed height */}
-      <View style={styles.mainContent} {...panResponder.panHandlers}>
+      {/* Main content area with conditional pan handlers */}
+      <View style={styles.mainContent} {...(!expanded ? panResponder.panHandlers : {})}>
         
         {/* Image section with fixed height */}
         <View style={styles.imageSection}>
@@ -1497,8 +1538,8 @@ const ArtistPublicProfile: React.FC<ArtistPublicProfileProps> = ({ route }) => {
           )}
           
           {/* Rating button below */}
-          <TouchableOpacity 
-            style={styles.instagramActionButton} 
+          <TouchableOpacity
+            style={styles.instagramActionButton}
             onPress={handleRatingPress}
             activeOpacity={0.7}
           >
@@ -1510,6 +1551,30 @@ const ArtistPublicProfile: React.FC<ArtistPublicProfileProps> = ({ route }) => {
               </Text>
             </View>
           </TouchableOpacity>
+
+          {/* Promote this artist in a show button - only show if not owner */}
+          {!isOwner && (
+            <TouchableOpacity
+              style={styles.instagramActionButton}
+              onPress={() => {
+                navigation.navigate('BottomTabs' as never, {
+                  screen: 'Create',
+                  params: {
+                    preSelectedArtist: {
+                      artist_id: currentData.id,
+                      artist_name: currentData.name
+                    }
+                  }
+                } as never);
+              }}
+              activeOpacity={0.7}
+            >
+              <View style={styles.instagramButtonInner}>
+                <Text style={styles.instagramPlusIcon}>🎤</Text>
+                <Text style={styles.instagramButtonLabel}>Promote</Text>
+              </View>
+            </TouchableOpacity>
+          )}
         </Animated.View>
 
         {/* Sliding panel - matching bandPublicProfile.tsx exactly */}
@@ -1521,25 +1586,51 @@ const ArtistPublicProfile: React.FC<ArtistPublicProfileProps> = ({ route }) => {
             },
           ]}
         >
-          {/* Name header inside panel with swipe down gesture */}
-          <PanGestureHandler onHandlerStateChange={handlePanelGesture}>
-            <LinearGradient
-              colors={["#2a2882", "#ff00ff"]}
-              style={styles.panelHeader}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 0 }}
+          {/* Name header inside panel with clickable collapse arrow */}
+          <LinearGradient
+            colors={["#2a2882", "#ff00ff"]}
+            style={styles.panelHeader}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 0 }}
+          >
+            {/* Clickable artist name - collapses when expanded */}
+            <TouchableOpacity
+              onPress={expanded ? handleCollapseArrowPress : undefined}
+              activeOpacity={expanded ? 0.7 : 1}
+              style={styles.nameClickableArea}
             >
               <Text style={styles.nameTextInside} numberOfLines={1}>
                 {currentData.name}
               </Text>
-              {/* Add subtle visual indicator for swipe down */}
-              {expanded && (
-                <Text style={styles.swipeDownIndicator}>▼</Text>
-              )}
-            </LinearGradient>
-          </PanGestureHandler>
+              <Text style={styles.musicIcon}>🎤</Text>
+            </TouchableOpacity>
 
-          {/* Scrollable tabs - matching profile.tsx style */}
+            {/* Visual handle indicator */}
+            <View style={styles.panelHandle} />
+
+            {/* Swipe hint when collapsed */}
+            {!expanded && (
+              <View style={styles.swipeHintContainer}>
+                <Text style={styles.swipeHintArrow}>▲</Text>
+                <Text style={styles.swipeHintText}>Swipe up for details</Text>
+                <Text style={styles.swipeHintArrow}>▲</Text>
+              </View>
+            )}
+
+            {/* Clickable collapse arrow - vertically centered */}
+            {expanded && (
+              <TouchableOpacity
+                style={styles.collapseArrowButton}
+                onPress={handleCollapseArrowPress}
+                activeOpacity={0.7}
+                hitSlop={{ top: 15, bottom: 15, left: 15, right: 15 }}
+              >
+                <Text style={styles.swipeDownIndicator}>▼</Text>
+              </TouchableOpacity>
+            )}
+          </LinearGradient>
+
+          {/* Scrollable tabs */}
           <ScrollView
             style={styles.tabsContainer}
             bounces={false}
@@ -1570,6 +1661,31 @@ const ArtistPublicProfile: React.FC<ArtistPublicProfileProps> = ({ route }) => {
                 )}
               </View>
             ))}
+            
+            {/* Artist Rating Footer */}
+            <View style={styles.panelFooter}>
+              <Text style={styles.ratingTitle}>Artist Rating</Text>
+              <View style={styles.starsContainer}>
+                {[1, 2, 3, 4, 5].map((star) => (
+                  <Text 
+                    key={star} 
+                    style={[
+                      styles.starIcon,
+                      {
+                        color: star <= Math.round(ratingInfo?.currentRating || 0) 
+                          ? '#FFD700' // Gold for filled stars
+                          : '#E0E0E0'  // Gray for empty stars
+                      }
+                    ]}
+                  >
+                    ★
+                  </Text>
+                ))}
+              </View>
+              <Text style={styles.ratingDetails}>
+                {ratingInfo ? ratingInfo.currentRating.toFixed(1) : '0.0'} out of 5 • {ratingInfo?.totalRaters || 0} rating{(ratingInfo?.totalRaters || 0) !== 1 ? 's' : ''}
+              </Text>
+            </View>
           </ScrollView>
         </Animated.View>
       </View>
@@ -1840,7 +1956,17 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
   },
   tabContent: {
-    flex: 1,
+    backgroundColor: "rgba(250, 250, 255, 1)",
+    paddingHorizontal: 24,
+    paddingVertical: 20,
+    borderBottomWidth: 1,
+    borderColor: "rgba(255, 0, 255, 0.1)",
+    borderLeftWidth: 3,
+    borderLeftColor: "rgba(255, 0, 255, 0.3)",
+    marginLeft: 12,
+    marginRight: 12,
+    marginBottom: 8,
+    borderRadius: 8,
   },
   songsContainer: {
     flex: 1,
@@ -1857,16 +1983,18 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingVertical: 12,
-    paddingHorizontal: 15,
-    backgroundColor: '#fff',
-    marginBottom: 8,
-    borderRadius: 8,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 2,
-    elevation: 2,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    backgroundColor: 'rgba(255, 255, 255, 0.95)',
+    marginBottom: 10,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 0, 255, 0.1)',
+    shadowColor: '#2a2882',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
+    elevation: 3,
   },
   songInfo: {
     flex: 1,
@@ -1874,10 +2002,10 @@ const styles = StyleSheet.create({
   },
   songTitle: {
     fontSize: 16,
-    fontFamily: 'Amiko-Regular',
-    color: '#333',
-    fontWeight: '500',
-    marginBottom: 2,
+    fontFamily: 'Amiko-SemiBold',
+    color: '#2a2882',
+    marginBottom: 4,
+    letterSpacing: 0.3,
   },
   songPriceSection: {
     flexDirection: 'row',
@@ -1992,29 +2120,31 @@ const styles = StyleSheet.create({
     fontFamily: 'Audiowide-Regular',
     color: '#fff',
   },
-  // Instagram-style action buttons
+  // Instagram-style action buttons - positioned above panel, avoiding follow button
   modernActionContainer: {
     position: 'absolute',
-    bottom: 140,
+    bottom: COLLAPSED_HEIGHT - 50,
     right: 20,
     alignItems: 'center',
     zIndex: 1000,
     elevation: 10,
   },
   instagramActionButton: {
-    backgroundColor: 'transparent',
-    borderWidth: 2,
-    borderColor: '#fff',
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    minWidth: 60,
-    marginBottom: 12,
+    backgroundColor: 'rgba(255, 255, 255, 0.15)',
+    borderWidth: 1.5,
+    borderColor: 'rgba(255, 255, 255, 0.8)',
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    minWidth: 65,
+    marginBottom: 14,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 4,
-    elevation: 5,
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.3,
+    shadowRadius: 6,
+    elevation: 8,
+    // Glassmorphism effect
+    backdropFilter: 'blur(10px)',
   },
   instagramButtonInner: {
     alignItems: 'center',
@@ -2048,23 +2178,21 @@ const styles = StyleSheet.create({
   },
   nameRatingOverlay: {
     position: 'absolute',
-    bottom: 0,
+    bottom: 20, // Lowered to sit just above collapsed panel
     left: 0,
     right: 0,
-    height: IMAGE_SECTION_HEIGHT,
-    justifyContent: 'flex-end',
-    paddingBottom: 20,
     paddingHorizontal: 20,
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'flex-end',
+    zIndex: 6,
   },
   scrollablePanel: {
     position: "absolute",
     top: COLLAPSED_HEIGHT - 50,
     left: 0,
     right: 0,
-    bottom: FOOTER_HEIGHT - 170,
+    bottom: 0, // Cover full screen when expanded
     backgroundColor: "#fff",
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
@@ -2076,13 +2204,14 @@ const styles = StyleSheet.create({
     zIndex: 10,
   },
   panelHeader: {
-    paddingVertical: 32.5,
+    paddingVertical: Math.max(32.5, DIMS.PANEL_HEADER_HEIGHT * 0.4),
     alignItems: "center",
     flexDirection: "row",
     justifyContent: "center",
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
     position: 'relative',
+    minHeight: DIMS.PANEL_HEADER_HEIGHT,
   },
   nameTextInside: {
     fontSize: 24,
@@ -2093,52 +2222,108 @@ const styles = StyleSheet.create({
     textShadowOffset: { width: 1, height: 1 },
     textShadowRadius: 2,
   },
-  swipeDownIndicator: {
-    fontSize: 16,
-    color: "rgba(255, 255, 255, 0.7)",
-    fontWeight: "bold",
+  panelHandle: {
+    position: 'absolute',
+    top: 12,
+    width: 40,
+    height: 4,
+    backgroundColor: 'rgba(255, 255, 255, 0.3)',
+    borderRadius: 2,
+    alignSelf: 'center',
+  },
+  nameClickableArea: {
+    flex: 1,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingVertical: 8,
+  },
+  musicIcon: {
+    fontSize: 18,
+    color: "#fff",
+    marginLeft: 8,
+  },
+  collapseArrowButton: {
     position: "absolute",
     left: 20,
+    top: 0,
+    bottom: 0,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 10,
   },
-  // Tab styles - matching profile.tsx
+  swipeDownIndicator: {
+    fontSize: 16,
+    color: "rgba(255, 255, 255, 0.8)",
+    fontWeight: "bold",
+    textAlign: 'center',
+  },
+  // Swipe hint styles
+  swipeHintContainer: {
+    position: 'absolute',
+    bottom: 8,
+    left: 0,
+    right: 0,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 6,
+  },
+  swipeHintText: {
+    fontSize: 11,
+    color: 'rgba(255, 255, 255, 0.7)',
+    fontFamily: 'Amiko-Regular',
+    letterSpacing: 0.5,
+  },
+  swipeHintArrow: {
+    fontSize: 10,
+    color: 'rgba(255, 255, 255, 0.7)',
+  },
+  // Tab styles - matching bandPublicProfile.tsx
   tabContainer: {
     backgroundColor: "#fff",
   },
   dropdownTab: {
     height: TAB_HEIGHT,
     borderBottomWidth: 1,
-    borderColor: "#f0f0f0",
+    borderColor: "rgba(0, 0, 0, 0.06)",
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    paddingHorizontal: 20,
+    paddingHorizontal: 24,
     backgroundColor: "#fff",
   },
   dropdownTabExpanded: {
-    backgroundColor: "#f8f8f8",
+    backgroundColor: "rgba(255, 0, 255, 0.04)",
     borderBottomColor: "#ff00ff",
+    borderBottomWidth: 2,
   },
   lastTab: {
     borderBottomWidth: 0,
   },
   dropdownText: {
-    fontSize: 18,
-    fontFamily: "Amiko-Regular",
-    color: "#333",
+    fontSize: 17,
+    fontFamily: "Amiko-SemiBold",
+    color: "#2a2882",
     textTransform: "capitalize",
-    fontWeight: "500",
+    letterSpacing: 0.5,
   },
   arrow: {
-    fontSize: 16,
+    fontSize: 14,
     color: "#ff00ff",
     fontWeight: "bold",
+    width: 28,
+    height: 28,
+    textAlign: 'center',
+    lineHeight: 28,
+    backgroundColor: 'rgba(255, 0, 255, 0.1)',
+    borderRadius: 14,
+    overflow: 'hidden',
   },
   dropdownContent: {
-    backgroundColor: "#fff",
-    paddingHorizontal: 20,
-    paddingVertical: 15,
-    borderBottomWidth: 1,
-    borderColor: "#f0f0f0",
+    backgroundColor: "rgba(250, 250, 255, 0.5)",
+    paddingHorizontal: 12,
+    paddingVertical: 12,
   },
   followButton: {
     position: 'absolute',
@@ -2181,42 +2366,46 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingVertical: 12,
-    paddingHorizontal: 15,
-    backgroundColor: '#f8f9fa',
-    marginBottom: 8,
-    borderRadius: 8,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 2,
-    elevation: 2,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    backgroundColor: 'rgba(255, 255, 255, 0.95)',
+    marginBottom: 10,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(42, 40, 130, 0.08)',
+    shadowColor: '#2a2882',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
+    elevation: 3,
   },
   showInfo: {
     flex: 1,
     marginRight: 10,
   },
   showTitle: {
-    fontSize: 16,
-    fontFamily: 'Amiko-Regular',
-    color: '#333',
-    fontWeight: '600',
-    marginBottom: 4,
+    fontSize: 17,
+    fontFamily: 'Amiko-SemiBold',
+    color: '#2a2882',
+    marginBottom: 6,
+    letterSpacing: 0.3,
   },
   showDate: {
-    fontSize: 14,
+    fontSize: 13,
     fontFamily: 'Amiko-Regular',
-    color: '#666',
-    marginBottom: 2,
+    color: '#888',
+    marginBottom: 4,
+    letterSpacing: 0.2,
   },
   showStatus: {
     fontSize: 12,
-    fontFamily: 'Amiko-Regular',
-    color: '#2a2882',
-    fontWeight: '600',
+    fontFamily: 'Amiko-SemiBold',
+    color: '#ff00ff',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
   },
   showArrow: {
-    fontSize: 18,
+    fontSize: 20,
     color: '#2a2882',
     fontWeight: 'bold',
   },
@@ -2574,6 +2763,58 @@ const styles = StyleSheet.create({
     color: '#666',
     textAlign: 'center',
     fontStyle: 'italic',
+  },
+  
+  // Artist Rating Footer styles - Premium design matching bandPublicProfile
+  panelFooter: {
+    paddingVertical: 28,
+    paddingHorizontal: 24,
+    alignItems: 'center',
+    backgroundColor: 'rgba(42, 40, 130, 0.08)',
+    marginTop: 20,
+    marginHorizontal: 12,
+    marginBottom: 20,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 0, 255, 0.15)',
+    shadowColor: '#ff00ff',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 12,
+    elevation: 4,
+  },
+  ratingTitle: {
+    fontSize: 16,
+    fontFamily: 'Amiko-SemiBold',
+    color: '#2a2882',
+    marginBottom: 14,
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
+  },
+  starsContainer: {
+    flexDirection: 'row',
+    marginBottom: 12,
+    padding: 8,
+    backgroundColor: 'rgba(255, 255, 255, 0.8)',
+    borderRadius: 16,
+    shadowColor: '#ff00ff',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 8,
+    elevation: 3,
+  },
+  starIcon: {
+    fontSize: 28,
+    marginHorizontal: 3,
+    textShadowColor: 'rgba(255, 0, 255, 0.4)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 4,
+  },
+  ratingDetails: {
+    fontSize: 13,
+    fontFamily: 'Amiko-Regular',
+    color: '#666',
+    textAlign: 'center',
   },
 });
 

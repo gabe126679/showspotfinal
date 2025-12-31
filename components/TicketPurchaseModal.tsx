@@ -10,12 +10,27 @@ import {
   Dimensions,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-// TODO: Enable Stripe when properly configured
-// import { useStripe } from '@stripe/stripe-react-native';
 import { supabase } from '../lib/supabase';
 import { ticketService } from '../services/ticketService';
+import { paymentService } from '../services/paymentService';
+import { notificationService } from '../services/notificationService';
 import { v4 as uuidv4 } from 'uuid';
 import { formatShowDate } from '../utils/dateUtils';
+import { useUser } from '../context/userContext';
+import AuthPromptModal from './AuthPromptModal';
+import { ToastManager } from './Toast';
+import { STRIPE_CONFIG } from '../config/stripe';
+
+// Conditionally import Stripe hook - not available in Expo Go
+let useStripe: () => { initPaymentSheet: any; presentPaymentSheet: any } = () => ({
+  initPaymentSheet: null,
+  presentPaymentSheet: null,
+});
+try {
+  useStripe = require('@stripe/stripe-react-native').useStripe;
+} catch (e) {
+  console.log('Stripe hook not available (expected in Expo Go)');
+}
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -29,6 +44,7 @@ interface TicketPurchaseModalProps {
     show_date?: string;
     show_time?: string;
     venue_name?: string;
+    venue_id?: string;
   };
   onPurchaseSuccess: () => void;
 }
@@ -41,14 +57,34 @@ const TicketPurchaseModal: React.FC<TicketPurchaseModalProps> = ({
 }) => {
   const [loading, setLoading] = useState(false);
   const [currentUser, setCurrentUser] = useState<any>(null);
-  // TODO: Enable Stripe when properly configured
-  // const { initPaymentSheet, presentPaymentSheet } = useStripe();
+  const [showAuthPrompt, setShowAuthPrompt] = useState(false);
+  const { initPaymentSheet, presentPaymentSheet } = useStripe();
+  const { isGuest, user } = useUser();
 
   useEffect(() => {
     if (visible) {
+      // If user is a guest, show auth prompt instead
+      if (isGuest || !user) {
+        setShowAuthPrompt(true);
+        return;
+      }
       getCurrentUser();
     }
-  }, [visible]);
+  }, [visible, isGuest, user]);
+
+  // If showing auth prompt for guests
+  if (showAuthPrompt && visible) {
+    return (
+      <AuthPromptModal
+        visible={true}
+        onClose={() => {
+          setShowAuthPrompt(false);
+          onClose();
+        }}
+        action="purchase_ticket"
+      />
+    );
+  }
 
   const getCurrentUser = async () => {
     try {
@@ -57,114 +93,82 @@ const TicketPurchaseModal: React.FC<TicketPurchaseModalProps> = ({
       setCurrentUser(user);
     } catch (error) {
       console.error('Error getting current user:', error);
-      Alert.alert('Error', 'Unable to get user information');
-    }
-  };
-
-  const createPaymentIntent = async () => {
-    try {
-      console.log('Creating payment intent for:', showData);
-      
-      // Convert price to cents for Stripe
-      const amountInCents = Math.round(showData.ticket_price * 100);
-      
-      // TODO: Replace with your backend endpoint
-      // For now, we'll simulate the payment intent creation
-      const response = await fetch('YOUR_BACKEND_URL/create-payment-intent', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          amount: amountInCents,
-          currency: 'usd',
-          metadata: {
-            show_id: showData.show_id,
-            purchaser_id: currentUser?.id,
-          },
-        }),
-      });
-
-      const { client_secret } = await response.json();
-      return client_secret;
-    } catch (error) {
-      console.error('Error creating payment intent:', error);
-      // For development/testing, return a mock client secret
-      return 'pi_test_mock_client_secret';
-    }
-  };
-
-  const initializePaymentSheet = async () => {
-    try {
-      setLoading(true);
-      
-      const clientSecret = await createPaymentIntent();
-      
-      // TODO: Enable Stripe when properly configured
-      /* const { error } = await initPaymentSheet({
-        merchantDisplayName: 'ShowSpot',
-        paymentIntentClientSecret: clientSecret,
-        defaultBillingDetails: {
-          name: currentUser?.user_metadata?.full_name || 'User',
-          email: currentUser?.email,
-        },
-        allowsDelayedPaymentMethods: false,
-      }); */
-
-      // TODO: Enable Stripe error handling when properly configured
-      /* if (error) {
-        console.error('Error initializing payment sheet:', error);
-        Alert.alert('Error', 'Unable to initialize payment');
-        return false;
-      } */
-
-      return true;
-    } catch (error) {
-      console.error('Error in initializePaymentSheet:', error);
-      Alert.alert('Error', 'Unable to setup payment');
-      return false;
-    } finally {
-      setLoading(false);
+      ToastManager.error('Unable to get user information');
     }
   };
 
   const handlePurchase = async () => {
     if (!currentUser) {
-      Alert.alert('Error', 'Please log in to purchase tickets');
+      ToastManager.error('Please log in to purchase tickets');
+      return;
+    }
+
+    // Check if Stripe is available (won't be in Expo Go)
+    if (!initPaymentSheet || !presentPaymentSheet) {
+      // Fall back to test purchase in development
+      console.log('Stripe not available, using test purchase');
+      await handleTestPurchase();
       return;
     }
 
     try {
       setLoading(true);
 
-      // Initialize payment sheet
-      const initialized = await initializePaymentSheet();
-      if (!initialized) return;
+      // Create payment intent using our service
+      const paymentResult = await paymentService.createTicketPaymentIntent(
+        showData.show_id,
+        showData.title,
+        showData.ticket_price,
+        1, // quantity
+        currentUser.id,
+        showData.venue_id
+      );
 
-      // TODO: Enable Stripe payment sheet when properly configured
-      /* const { error: paymentError } = await presentPaymentSheet(); */
+      if (!paymentResult.success || !paymentResult.clientSecret) {
+        ToastManager.error(paymentResult.error || 'Unable to initialize payment');
+        return;
+      }
 
-      // TODO: Enable Stripe payment error handling when properly configured
-      /* if (paymentError) {
+      // Initialize the payment sheet
+      const { error: initError } = await initPaymentSheet({
+        merchantDisplayName: 'ShowSpot',
+        paymentIntentClientSecret: paymentResult.clientSecret,
+        defaultBillingDetails: {
+          name: currentUser?.user_metadata?.full_name || 'User',
+          email: currentUser?.email,
+        },
+        allowsDelayedPaymentMethods: false,
+      });
+
+      if (initError) {
+        console.error('Error initializing payment sheet:', initError);
+        ToastManager.error('Unable to initialize payment');
+        return;
+      }
+
+      // Present the payment sheet to the user
+      const { error: paymentError } = await presentPaymentSheet();
+
+      if (paymentError) {
         if (paymentError.code !== 'Canceled') {
           console.error('Payment error:', paymentError);
-          Alert.alert('Payment Failed', paymentError.message);
+          ToastManager.error(paymentError.message || 'Payment failed');
         }
         return;
-      } */
+      }
 
-      // Payment successful, create ticket
-      await createTicket();
-      
-    } catch (error) {
+      // Payment successful! Create the ticket
+      await createTicket(paymentResult.paymentIntentId!);
+
+    } catch (error: any) {
       console.error('Error in handlePurchase:', error);
-      Alert.alert('Error', 'Something went wrong with your purchase');
+      ToastManager.error('Something went wrong with your purchase');
     } finally {
       setLoading(false);
     }
   };
 
-  const createTicket = async () => {
+  const createTicket = async (paymentIntentId: string) => {
     try {
       console.log('Creating ticket after successful payment');
 
@@ -188,7 +192,7 @@ const TicketPurchaseModal: React.FC<TicketPurchaseModalProps> = ({
         qr_code_data: qrCodeData,
         ticket_status: 'purchased',
         payment_status: 'active',
-        stripe_payment_intent_id: 'pi_test_mock', // In production, get from Stripe
+        stripe_payment_intent_id: paymentIntentId,
       });
 
       if (!ticketResult.success) {
@@ -196,14 +200,21 @@ const TicketPurchaseModal: React.FC<TicketPurchaseModalProps> = ({
       }
 
       // Add purchaser to show
-      console.log('About to add purchaser to show:', { show_id: showData.show_id, user_id: currentUser.id });
       const showResult = await ticketService.addPurchaserToShow(showData.show_id, currentUser.id);
       if (!showResult.success) {
-        console.error('❌ FAILED to add purchaser to show:', showResult.error);
-        Alert.alert('Warning', 'Ticket purchased but show count may not update immediately');
-      } else {
-        console.log('✅ Successfully added purchaser to show');
+        console.error('Failed to add purchaser to show:', showResult.error);
       }
+
+      // Send ticket confirmation notification
+      await notificationService.createTicketPurchaseConfirmation(
+        currentUser.id,
+        showData.title,
+        showData.show_id,
+        showData.venue_name || 'the venue',
+        showData.show_date || '',
+        1,
+        showData.ticket_price
+      );
 
       // Success!
       Alert.alert(
@@ -226,24 +237,40 @@ const TicketPurchaseModal: React.FC<TicketPurchaseModalProps> = ({
     }
   };
 
-  // For development/testing - simulate successful purchase
+  // For TEST MODE - simulate successful purchase without Stripe UI
   const handleTestPurchase = async () => {
     if (!currentUser) {
-      Alert.alert('Error', 'Please log in to purchase tickets');
+      ToastManager.error('Please log in to purchase tickets');
       return;
     }
 
     try {
       setLoading(true);
-      
+
+      // Create payment intent (will be mock in test mode)
+      const paymentResult = await paymentService.createTicketPaymentIntent(
+        showData.show_id,
+        showData.title,
+        showData.ticket_price,
+        1,
+        currentUser.id,
+        showData.venue_id
+      );
+
+      if (!paymentResult.success) {
+        ToastManager.error(paymentResult.error || 'Payment failed');
+        return;
+      }
+
       // Simulate payment delay
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      
-      await createTicket();
-      
+      await new Promise(resolve => setTimeout(resolve, 1500));
+
+      // Create the ticket with mock payment ID
+      await createTicket(paymentResult.paymentIntentId || `pi_test_${Date.now()}`);
+
     } catch (error) {
       console.error('Error in test purchase:', error);
-      Alert.alert('Error', 'Something went wrong with your purchase');
+      ToastManager.error('Something went wrong with your purchase');
     } finally {
       setLoading(false);
     }
@@ -251,11 +278,8 @@ const TicketPurchaseModal: React.FC<TicketPurchaseModalProps> = ({
 
   // Don't render modal if showData is null
   if (!showData) {
-    console.log('TicketPurchaseModal: showData is null, not rendering');
     return null;
   }
-  
-  console.log('TicketPurchaseModal: Rendering with showData:', showData);
 
   return (
     <Modal
@@ -271,9 +295,12 @@ const TicketPurchaseModal: React.FC<TicketPurchaseModalProps> = ({
             style={styles.modalGradient}
           >
             <Text style={styles.modalTitle}>Purchase Ticket</Text>
-            
+
             <View style={styles.ticketInfo}>
               <Text style={styles.showTitle}>{showData?.title || 'Show'}</Text>
+              {showData?.venue_name && (
+                <Text style={styles.venueText}>at {showData.venue_name}</Text>
+              )}
               {showData?.show_date && (
                 <Text style={styles.showDetails}>
                   {formatShowDate(showData.show_date)}
@@ -284,35 +311,36 @@ const TicketPurchaseModal: React.FC<TicketPurchaseModalProps> = ({
             </View>
 
             <View style={styles.buttonContainer}>
-              {/* For development, use test purchase */}
-              <TouchableOpacity
-                style={[styles.purchaseButton, loading && styles.disabledButton]}
-                onPress={handleTestPurchase}
-                disabled={loading}
-              >
-                {loading ? (
-                  <ActivityIndicator color="#fff" />
-                ) : (
-                  <Text style={styles.purchaseButtonText}>
-                    Purchase Ticket (Test)
-                  </Text>
-                )}
-              </TouchableOpacity>
-
-              {/* Uncomment for production Stripe */}
-              {/* <TouchableOpacity
-                style={[styles.purchaseButton, loading && styles.disabledButton]}
-                onPress={handlePurchase}
-                disabled={loading}
-              >
-                {loading ? (
-                  <ActivityIndicator color="#fff" />
-                ) : (
-                  <Text style={styles.purchaseButtonText}>
-                    Purchase with Stripe
-                  </Text>
-                )}
-              </TouchableOpacity> */}
+              {/* Show appropriate button based on mode and Stripe availability */}
+              {(STRIPE_CONFIG.IS_TEST_MODE || !initPaymentSheet) ? (
+                <TouchableOpacity
+                  style={[styles.purchaseButton, loading && styles.disabledButton]}
+                  onPress={handleTestPurchase}
+                  disabled={loading}
+                >
+                  {loading ? (
+                    <ActivityIndicator color="#000" />
+                  ) : (
+                    <Text style={styles.purchaseButtonText}>
+                      Purchase Ticket {STRIPE_CONFIG.IS_TEST_MODE ? '(Test)' : ''}
+                    </Text>
+                  )}
+                </TouchableOpacity>
+              ) : (
+                <TouchableOpacity
+                  style={[styles.purchaseButton, loading && styles.disabledButton]}
+                  onPress={handlePurchase}
+                  disabled={loading}
+                >
+                  {loading ? (
+                    <ActivityIndicator color="#000" />
+                  ) : (
+                    <Text style={styles.purchaseButtonText}>
+                      Purchase Ticket
+                    </Text>
+                  )}
+                </TouchableOpacity>
+              )}
 
               <TouchableOpacity
                 style={styles.cancelButton}
@@ -322,6 +350,12 @@ const TicketPurchaseModal: React.FC<TicketPurchaseModalProps> = ({
                 <Text style={styles.cancelButtonText}>Cancel</Text>
               </TouchableOpacity>
             </View>
+
+            {(STRIPE_CONFIG.IS_TEST_MODE || !initPaymentSheet) && (
+              <Text style={styles.testModeText}>
+                {!initPaymentSheet ? 'Dev mode - Stripe requires production build' : 'Test mode - No real charges'}
+              </Text>
+            )}
           </LinearGradient>
         </View>
       </View>
@@ -373,6 +407,12 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#fff',
     textAlign: 'center',
+    marginBottom: 4,
+  },
+  venueText: {
+    fontSize: 14,
+    color: 'rgba(255, 255, 255, 0.7)',
+    textAlign: 'center',
     marginBottom: 8,
   },
   showDetails: {
@@ -418,6 +458,12 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#fff',
     fontWeight: '600',
+  },
+  testModeText: {
+    marginTop: 15,
+    fontSize: 12,
+    color: 'rgba(255, 255, 255, 0.5)',
+    textAlign: 'center',
   },
 });
 

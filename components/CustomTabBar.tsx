@@ -21,15 +21,21 @@ interface CustomTabBarProps extends BottomTabBarProps {
   onSwipeUp?: () => void;
 }
 
-const CustomTabBar: React.FC<CustomTabBarProps> = ({ 
-  state, 
-  descriptors, 
+const CustomTabBar: React.FC<CustomTabBarProps> = ({
+  state,
+  descriptors,
   navigation,
   profileData = { name: 'Profile', type: 'spotter' },
   onGesturePress,
-  onSwipeUp 
+  onSwipeUp
 }) => {
   const isProfileScreen = state.routes[state.index].name === 'Profile';
+  const isPlayerScreen = state.routes[state.index].name === 'Player';
+
+  // Hide footer completely when on Player screen for full immersion
+  if (isPlayerScreen) {
+    return null;
+  }
   
   const handleGestureEvent = (event: any) => {
     if (event.nativeEvent.state === State.END) {
@@ -44,8 +50,8 @@ const CustomTabBar: React.FC<CustomTabBarProps> = ({
   };
   
   const getIconComponent = (routeName: string, color: string) => {
-    const iconProps = { width: 40, height: 40, fill: color };
-    
+    const iconProps = { width: 28, height: 28, fill: color };
+
     switch (routeName) {
       case 'MapHome':
         return <HomeIcon {...iconProps} />;
@@ -59,6 +65,23 @@ const CustomTabBar: React.FC<CustomTabBarProps> = ({
         return <ProfileIcon {...iconProps} />;
       default:
         return null;
+    }
+  };
+
+  const getTabLabel = (routeName: string) => {
+    switch (routeName) {
+      case 'MapHome':
+        return 'Home';
+      case 'Search':
+        return 'Search';
+      case 'Create':
+        return 'Create';
+      case 'Player':
+        return 'Player';
+      case 'Profile':
+        return 'Profile';
+      default:
+        return '';
     }
   };
 
@@ -125,11 +148,16 @@ const CustomTabBar: React.FC<CustomTabBarProps> = ({
                   isFocused && styles.activeIconWrapper
                 ]}>
                   {getIconComponent(
-                    route.name, 
+                    route.name,
                     isFocused ? '#ffffff' : 'rgba(255, 255, 255, 0.6)'
                   )}
                 </View>
-                {isFocused && <View style={styles.activeIndicator} />}
+                <Text style={[
+                  styles.tabLabel,
+                  isFocused && styles.tabLabelActive
+                ]}>
+                  {getTabLabel(route.name)}
+                </Text>
               </TouchableOpacity>
             );
           })}
@@ -206,39 +234,39 @@ const styles = StyleSheet.create({
   modernTabButton: {
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 6,
-    paddingHorizontal: 8,
-    borderRadius: 20,
+    paddingVertical: 4,
+    paddingHorizontal: 4,
+    borderRadius: 12,
     flex: 1,
-    maxWidth: 70,
+    minWidth: 60,
+    maxWidth: 75,
   },
   activeTabButton: {
+    backgroundColor: 'rgba(255, 255, 255, 0.15)',
+    transform: [{ scale: 1.05 }],
+  },
+  iconWrapper: {
+    padding: 6,
+    borderRadius: 14,
+  },
+  activeIconWrapper: {
     backgroundColor: 'rgba(255, 255, 255, 0.2)',
     shadowColor: '#ffffff',
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.3,
+    shadowOpacity: 0.4,
     shadowRadius: 4,
-    elevation: 5,
+    elevation: 4,
   },
-  iconWrapper: {
-    padding: 4,
-    borderRadius: 12,
-    transition: 'all 0.2s ease',
+  tabLabel: {
+    fontSize: 10,
+    fontWeight: '500',
+    color: 'rgba(255, 255, 255, 0.6)',
+    marginTop: 2,
+    textAlign: 'center',
   },
-  activeIconWrapper: {
-    backgroundColor: 'rgba(255, 255, 255, 0.1)',
-  },
-  activeIndicator: {
-    width: 4,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: '#ffffff',
-    marginTop: 4,
-    shadowColor: '#ffffff',
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.8,
-    shadowRadius: 2,
-    elevation: 3,
+  tabLabelActive: {
+    color: '#ffffff',
+    fontWeight: '700',
   },
 });
 

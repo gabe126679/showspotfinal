@@ -15,6 +15,8 @@ import { LinearGradient } from 'expo-linear-gradient';
 // import { useStripe } from '@stripe/stripe-react-native';
 import { supabase } from '../lib/supabase';
 import { songPurchaseService } from '../services/songPurchaseService';
+import { useUser } from '../context/userContext';
+import AuthPromptModal from './AuthPromptModal';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -44,15 +46,36 @@ const SongPurchaseModal: React.FC<SongPurchaseModalProps> = ({
   const [loading, setLoading] = useState(false);
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [alreadyPurchased, setAlreadyPurchased] = useState(false);
+  const [showAuthPrompt, setShowAuthPrompt] = useState(false);
   // TODO: Enable Stripe when properly configured
   // const { initPaymentSheet, presentPaymentSheet } = useStripe();
+  const { isGuest, user } = useUser();
 
   useEffect(() => {
     if (visible && songData) {
+      // If user is a guest, show auth prompt instead
+      if (isGuest || !user) {
+        setShowAuthPrompt(true);
+        return;
+      }
       getCurrentUser();
       checkIfAlreadyPurchased();
     }
-  }, [visible, songData]);
+  }, [visible, songData, isGuest, user]);
+
+  // If showing auth prompt for guests
+  if (showAuthPrompt && visible) {
+    return (
+      <AuthPromptModal
+        visible={true}
+        onClose={() => {
+          setShowAuthPrompt(false);
+          onClose();
+        }}
+        action="purchase_song"
+      />
+    );
+  }
 
   const getCurrentUser = async () => {
     try {

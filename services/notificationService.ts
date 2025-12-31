@@ -634,11 +634,24 @@ class NotificationService {
     // Send invitations to all show members
     for (const member of showMembers) {
       if (member.show_member_type === 'artist') {
-        // Send artist invitation
+        // Look up the artist's spotter_id (user auth ID) from the artists table
+        const { data: artistData, error: artistError } = await supabase
+          .from('artists')
+          .select('spotter_id')
+          .eq('artist_id', member.show_member_id)
+          .single();
+
+        if (artistError || !artistData?.spotter_id) {
+          console.error('Could not find spotter_id for artist:', member.show_member_id, artistError);
+          results.push({ member, result: { success: false, error: 'Artist not found' } });
+          continue;
+        }
+
+        // Send artist invitation to their spotter_id (user auth ID)
         const result = await this.createArtistShowInvitationNotification(
           promoterId,
           promoterName,
-          member.show_member_id,
+          artistData.spotter_id,
           showId,
           {
             ...showData,
@@ -647,12 +660,25 @@ class NotificationService {
         );
         results.push({ member, result });
       } else if (member.show_member_type === 'band' && member.show_member_consensus) {
-        // Send band member invitations
+        // Send band member invitations - band_member_id is already the artist_id
         for (const bandMember of member.show_member_consensus) {
+          // Look up the artist's spotter_id for each band member
+          const { data: artistData, error: artistError } = await supabase
+            .from('artists')
+            .select('spotter_id')
+            .eq('artist_id', bandMember.show_band_member_id)
+            .single();
+
+          if (artistError || !artistData?.spotter_id) {
+            console.error('Could not find spotter_id for band member:', bandMember.show_band_member_id, artistError);
+            results.push({ bandMember, result: { success: false, error: 'Band member not found' } });
+            continue;
+          }
+
           const result = await this.createBandMemberShowInvitationNotification(
             promoterId,
             promoterName,
-            bandMember.show_band_member_id,
+            artistData.spotter_id,
             member.show_member_name,
             showId,
             {
@@ -1409,7 +1435,7 @@ class NotificationService {
     }
   }
 
-  // Create backline rejected notification  
+  // Create backline rejected notification
   async createBandBacklineMemberRejectedNotification(
     rejecterId: string,
     rejecterName: string,
@@ -1424,11 +1450,240 @@ class NotificationService {
       notification_sender: rejecterId,
       notification_title: 'Backline Rejected by Band Member',
       notification_message: `${rejecterName} rejected the backline request for ${bandName}.`,
-      notification_data: { 
+      notification_data: {
         show_id: showId,
         band_id: bandId,
         band_name: bandName,
         notification_subtype: 'backline_member_rejected'
+      },
+      is_read: false,
+      action_required: false,
+    });
+  }
+
+  // ============================================
+  // NEW NOTIFICATION TYPES - Social & Commerce
+  // ============================================
+
+  // Create new follower notification
+  async createNewFollowerNotification(
+    followerId: string,
+    followerName: string,
+    recipientId: string,
+    entityType: 'artist' | 'band' | 'venue',
+    entityName: string
+  ): Promise<{ success: boolean; error?: string; data?: any }> {
+    return this.createNotification({
+      notification_type: 'general',
+      notification_recipient: recipientId,
+      notification_sender: followerId,
+      notification_title: 'New Follower',
+      notification_message: `${followerName} started following ${entityName}`,
+      notification_data: {
+        follower_id: followerId,
+        follower_name: followerName,
+        entity_type: entityType,
+        notification_subtype: 'new_follower'
+      },
+      is_read: false,
+      action_required: false,
+    });
+  }
+
+  // Create tip received notification (for artists/bands)
+  async createTipReceivedNotification(
+    senderId: string,
+    senderName: string,
+    recipientId: string,
+    amount: number,
+    entityType: 'artist' | 'band',
+    entityName: string
+  ): Promise<{ success: boolean; error?: string; data?: any }> {
+    return this.createNotification({
+      notification_type: 'general',
+      notification_recipient: recipientId,
+      notification_sender: senderId,
+      notification_title: 'Tip Received!',
+      notification_message: `${senderName} sent a $${amount.toFixed(2)} tip to ${entityName}`,
+      notification_data: {
+        sender_id: senderId,
+        sender_name: senderName,
+        amount: amount,
+        entity_type: entityType,
+        notification_subtype: 'tip_received'
+      },
+      is_read: false,
+      action_required: false,
+    });
+  }
+
+  // Create song purchase notification (for artist/band)
+  async createSongPurchaseNotification(
+    buyerId: string,
+    buyerName: string,
+    recipientId: string,
+    songTitle: string,
+    songId: string,
+    price: number
+  ): Promise<{ success: boolean; error?: string; data?: any }> {
+    return this.createNotification({
+      notification_type: 'general',
+      notification_recipient: recipientId,
+      notification_sender: buyerId,
+      notification_title: 'Song Purchased!',
+      notification_message: `${buyerName} purchased "${songTitle}" for $${price.toFixed(2)}`,
+      notification_data: {
+        buyer_id: buyerId,
+        buyer_name: buyerName,
+        song_id: songId,
+        song_title: songTitle,
+        price: price,
+        notification_subtype: 'song_purchased'
+      },
+      is_read: false,
+      action_required: false,
+    });
+  }
+
+  // Create album purchase notification (for artist/band)
+  async createAlbumPurchaseNotification(
+    buyerId: string,
+    buyerName: string,
+    recipientId: string,
+    albumTitle: string,
+    albumId: string,
+    price: number
+  ): Promise<{ success: boolean; error?: string; data?: any }> {
+    return this.createNotification({
+      notification_type: 'general',
+      notification_recipient: recipientId,
+      notification_sender: buyerId,
+      notification_title: 'Album Purchased!',
+      notification_message: `${buyerName} purchased "${albumTitle}" for $${price.toFixed(2)}`,
+      notification_data: {
+        buyer_id: buyerId,
+        buyer_name: buyerName,
+        album_id: albumId,
+        album_title: albumTitle,
+        price: price,
+        notification_subtype: 'album_purchased'
+      },
+      is_read: false,
+      action_required: false,
+    });
+  }
+
+  // Create ticket purchase confirmation (for buyer)
+  async createTicketPurchaseConfirmation(
+    recipientId: string,
+    showName: string,
+    showId: string,
+    venueName: string,
+    showDate: string,
+    ticketCount: number,
+    totalPrice: number
+  ): Promise<{ success: boolean; error?: string; data?: any }> {
+    return this.createNotification({
+      notification_type: 'general',
+      notification_recipient: recipientId,
+      notification_sender: null,
+      notification_title: 'Ticket Confirmed!',
+      notification_message: `You got ${ticketCount} ticket${ticketCount > 1 ? 's' : ''} to "${showName}" at ${venueName}`,
+      notification_data: {
+        show_id: showId,
+        show_name: showName,
+        venue_name: venueName,
+        show_date: showDate,
+        ticket_count: ticketCount,
+        total_price: totalPrice,
+        notification_subtype: 'ticket_confirmed'
+      },
+      is_read: false,
+      action_required: false,
+    });
+  }
+
+  // Create rating received notification
+  async createRatingReceivedNotification(
+    raterId: string,
+    raterName: string,
+    recipientId: string,
+    entityType: 'artist' | 'band' | 'venue',
+    entityName: string,
+    rating: number
+  ): Promise<{ success: boolean; error?: string; data?: any }> {
+    const stars = '★'.repeat(rating) + '☆'.repeat(5 - rating);
+    return this.createNotification({
+      notification_type: 'general',
+      notification_recipient: recipientId,
+      notification_sender: raterId,
+      notification_title: 'New Rating',
+      notification_message: `${raterName} rated ${entityName} ${stars}`,
+      notification_data: {
+        rater_id: raterId,
+        rater_name: raterName,
+        entity_type: entityType,
+        rating: rating,
+        notification_subtype: 'rating_received'
+      },
+      is_read: false,
+      action_required: false,
+    });
+  }
+
+  // Create show reminder notification (for ticket holders)
+  async createShowReminderNotification(
+    recipientId: string,
+    showName: string,
+    showId: string,
+    venueName: string,
+    showDate: string,
+    hoursUntil: number
+  ): Promise<{ success: boolean; error?: string; data?: any }> {
+    const timeText = hoursUntil === 24 ? 'tomorrow' : `in ${hoursUntil} hours`;
+    return this.createNotification({
+      notification_type: 'general',
+      notification_recipient: recipientId,
+      notification_sender: null,
+      notification_title: 'Show Reminder',
+      notification_message: `"${showName}" at ${venueName} is ${timeText}!`,
+      notification_data: {
+        show_id: showId,
+        show_name: showName,
+        venue_name: venueName,
+        show_date: showDate,
+        hours_until: hoursUntil,
+        notification_subtype: 'show_reminder'
+      },
+      is_read: false,
+      action_required: false,
+    });
+  }
+
+  // Create new show notification (for followers of artist/band/venue)
+  async createNewShowNotification(
+    recipientId: string,
+    showName: string,
+    showId: string,
+    performerName: string,
+    performerType: 'artist' | 'band',
+    venueName: string,
+    showDate: string
+  ): Promise<{ success: boolean; error?: string; data?: any }> {
+    return this.createNotification({
+      notification_type: 'general',
+      notification_recipient: recipientId,
+      notification_sender: null,
+      notification_title: 'New Show Announced!',
+      notification_message: `${performerName} is performing at ${venueName}`,
+      notification_data: {
+        show_id: showId,
+        show_name: showName,
+        performer_name: performerName,
+        performer_type: performerType,
+        venue_name: venueName,
+        show_date: showDate,
+        notification_subtype: 'new_show_announced'
       },
       is_read: false,
       action_required: false,

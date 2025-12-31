@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef } from "react";
-import { StyleSheet, View, Dimensions, Text, TouchableOpacity, StatusBar, ScrollView, Image } from "react-native";
+import { StyleSheet, View, Dimensions, Text, TouchableOpacity, StatusBar, ScrollView, Image, Animated, Easing } from "react-native";
 import MapView, { Marker, Callout } from "react-native-maps";
 import * as Location from "expo-location";
 import { useNavigation } from "@react-navigation/native";
@@ -8,7 +8,9 @@ import ShowSpotHeader from './ShowSpotHeader';
 import { notificationService } from '../services/notificationService';
 import NotificationManager from './NotificationManager';
 import { LinearGradient } from 'expo-linear-gradient';
-import Svg, { Circle, Defs, RadialGradient, Stop } from 'react-native-svg';
+import Svg, { Circle, Defs, RadialGradient, Stop, Path } from 'react-native-svg';
+import { useOnboarding } from './OnboardingFlow';
+import EmptyState from './EmptyState';
 
 const { width, height } = Dimensions.get("window");
 
@@ -54,6 +56,9 @@ const MapHome = () => {
   const [userVotes, setUserVotes] = useState({});
   const [userRatings, setUserRatings] = useState({});
 
+  // Onboarding
+  const { startTutorial, isOnboardingActive } = useOnboarding();
+
   // Get current user and set initial region
   useEffect(() => {
     getCurrentUser();
@@ -79,6 +84,17 @@ const MapHome = () => {
       }
     })();
   }, []);
+
+  // Trigger map onboarding tutorial when map is ready and data is loaded
+  useEffect(() => {
+    if (mapReady && !loading && venues.length > 0) {
+      // Small delay to ensure everything is rendered
+      const timer = setTimeout(() => {
+        startTutorial('map');
+      }, 500);
+      return () => clearTimeout(timer);
+    }
+  }, [mapReady, loading, venues.length, startTutorial]);
 
   const getCurrentUser = async () => {
     try {
@@ -597,23 +613,23 @@ const MapHome = () => {
       
       {/* S/A/V Tabs Overlay - Always visible */}
       <View style={styles.tabsOverlay}>
-        <TouchableOpacity 
+        <TouchableOpacity
           style={[styles.tab, activeTab === 'S' && styles.activeTab]}
           onPress={() => setActiveTab('S')}
         >
-          <Text style={[styles.tabText, activeTab === 'S' && styles.activeTabText]}>S</Text>
+          <Text style={[styles.tabText, activeTab === 'S' && styles.activeTabText]}>Shows</Text>
         </TouchableOpacity>
-        <TouchableOpacity 
+        <TouchableOpacity
           style={[styles.tab, activeTab === 'A' && styles.activeTab]}
           onPress={() => setActiveTab('A')}
         >
-          <Text style={[styles.tabText, activeTab === 'A' && styles.activeTabText]}>A</Text>
+          <Text style={[styles.tabText, activeTab === 'A' && styles.activeTabText]}>Artists</Text>
         </TouchableOpacity>
-        <TouchableOpacity 
+        <TouchableOpacity
           style={[styles.tab, activeTab === 'V' && styles.activeTab]}
           onPress={() => setActiveTab('V')}
         >
-          <Text style={[styles.tabText, activeTab === 'V' && styles.activeTabText]}>V</Text>
+          <Text style={[styles.tabText, activeTab === 'V' && styles.activeTabText]}>Venues</Text>
         </TouchableOpacity>
       </View>
       
@@ -694,11 +710,31 @@ const MapHome = () => {
 
       {/* Tab content overlays */}
       {activeTab === 'S' ? (
-        <ScrollView style={styles.showsFeedContainer}>
-          {shows.length === 0 ? (
-            <View style={styles.emptyContainer}>
-              <Text style={styles.emptyText}>No shows available</Text>
+        <ScrollView
+          style={styles.showsFeedContainer}
+          contentContainerStyle={styles.feedContentContainer}
+          showsVerticalScrollIndicator={false}
+        >
+          {/* Section Header */}
+          <View style={styles.sectionHeader}>
+            <View style={styles.sectionTitleRow}>
+              <Text style={styles.sectionTitle}>Upcoming Shows</Text>
+              <View style={styles.sectionCount}>
+                <Text style={styles.sectionCountText}>{shows.length}</Text>
+              </View>
             </View>
+            <Text style={styles.sectionSubtitle}>Vote for shows you want to see happen</Text>
+          </View>
+
+          {shows.length === 0 ? (
+            <EmptyState
+              icon="show"
+              title="No Shows Yet"
+              subtitle="Check back soon for upcoming shows in your area. Be the first to promote a show!"
+              actionLabel="Promote a Show"
+              onAction={() => navigation.navigate('Create' as never)}
+              compact
+            />
           ) : (
             shows.map((show) => (
               <ShowCard
@@ -712,11 +748,31 @@ const MapHome = () => {
           )}
         </ScrollView>
       ) : activeTab === 'A' ? (
-        <ScrollView style={styles.artistsFeedContainer}>
-          {artists.length === 0 ? (
-            <View style={styles.emptyContainer}>
-              <Text style={styles.emptyText}>No artists or bands available</Text>
+        <ScrollView
+          style={styles.artistsFeedContainer}
+          contentContainerStyle={styles.feedContentContainer}
+          showsVerticalScrollIndicator={false}
+        >
+          {/* Section Header */}
+          <View style={styles.sectionHeader}>
+            <View style={styles.sectionTitleRow}>
+              <Text style={styles.sectionTitle}>Discover Artists</Text>
+              <View style={styles.sectionCount}>
+                <Text style={styles.sectionCountText}>{artists.length}</Text>
+              </View>
             </View>
+            <Text style={styles.sectionSubtitle}>Rate and follow your favorite performers</Text>
+          </View>
+
+          {artists.length === 0 ? (
+            <EmptyState
+              icon="music"
+              title="No Artists Yet"
+              subtitle="Artists and bands will appear here once they join ShowSpot"
+              actionLabel="Become an Artist"
+              onAction={() => navigation.navigate('ArtistSignup' as never)}
+              compact
+            />
           ) : (
             artists.map((artist) => (
               <ArtistCard
@@ -772,35 +828,49 @@ const styles = StyleSheet.create({
   },
   errorContainer: {
     position: 'absolute',
-    top: 95, // Account for header height (85px) + small margin
+    top: 95,
     left: 20,
     right: 20,
-    backgroundColor: 'rgba(255, 0, 0, 0.9)',
-    padding: 15,
-    borderRadius: 10,
+    backgroundColor: 'rgba(255, 50, 50, 0.95)',
+    padding: 16,
+    borderRadius: 16,
     zIndex: 1000,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 100, 100, 0.5)',
+    shadowColor: '#ff3333',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
   },
   errorText: {
     color: 'white',
-    fontSize: 16,
+    fontSize: 14,
     textAlign: 'center',
     fontWeight: 'bold',
+    fontFamily: 'Amiko-Bold',
   },
   loadingContainer: {
     position: 'absolute',
-    top: 95, // Account for header height (85px) + small margin
+    top: 95,
     left: 20,
     right: 20,
-    backgroundColor: 'rgba(42, 40, 130, 0.9)',
-    padding: 15,
-    borderRadius: 10,
+    backgroundColor: 'rgba(10, 10, 20, 0.95)',
+    padding: 16,
+    borderRadius: 16,
     zIndex: 1000,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 0, 255, 0.3)',
+    shadowColor: '#ff00ff',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
   },
   loadingText: {
-    color: 'white',
-    fontSize: 16,
+    color: '#ff00ff',
+    fontSize: 14,
     textAlign: 'center',
     fontWeight: 'bold',
+    fontFamily: 'Amiko-Bold',
   },
   venueIconContainer: {
     alignItems: 'center',
@@ -821,71 +891,89 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   calloutContainer: {
-    width: 200,
-    padding: 10,
+    width: 220,
+    padding: 14,
     alignItems: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.98)',
+    borderRadius: 12,
   },
   calloutTitle: {
     fontSize: 16,
     fontWeight: 'bold',
     color: '#2a2882',
     textAlign: 'center',
-    marginBottom: 5,
+    marginBottom: 6,
+    fontFamily: 'Amiko-Bold',
   },
   calloutDescription: {
     fontSize: 12,
     color: '#666',
     textAlign: 'center',
-    marginBottom: 10,
+    marginBottom: 12,
+    fontFamily: 'Amiko-Regular',
   },
   calloutButton: {
     backgroundColor: '#ff00ff',
-    paddingHorizontal: 15,
-    paddingVertical: 8,
-    borderRadius: 15,
+    paddingHorizontal: 18,
+    paddingVertical: 10,
+    borderRadius: 12,
+    shadowColor: '#ff00ff',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.4,
+    shadowRadius: 4,
   },
   calloutButtonText: {
     color: 'white',
-    fontSize: 12,
+    fontSize: 13,
     fontWeight: 'bold',
     textAlign: 'center',
+    fontFamily: 'Amiko-Bold',
   },
   tabsOverlay: {
     position: 'absolute',
-    top: 190, // Moved down another 20px
+    top: 140, // Increased for iPhone 16 safe area + header clearance
     alignSelf: 'center',
     flexDirection: 'row',
-    backgroundColor: 'rgba(42, 40, 130, 0.95)',
-    borderRadius: 20,
-    padding: 2,
-    height: 36,
+    backgroundColor: 'rgba(10, 10, 20, 0.92)',
+    borderRadius: 28,
+    padding: 5,
     zIndex: 1000,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 3.84,
-    elevation: 5,
+    shadowColor: '#ff00ff',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.5,
+    shadowRadius: 16,
+    elevation: 10,
+    borderWidth: 1.5,
+    borderColor: 'rgba(255, 0, 255, 0.4)',
   },
   tab: {
     backgroundColor: 'transparent',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 16,
+    paddingHorizontal: 18,
+    paddingVertical: 10,
+    borderRadius: 22,
     marginHorizontal: 2,
-    minWidth: 32,
     alignItems: 'center',
     justifyContent: 'center',
   },
   activeTab: {
     backgroundColor: '#ff00ff',
+    shadowColor: '#ff00ff',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 1,
+    shadowRadius: 12,
   },
   tabText: {
-    color: 'rgba(255, 255, 255, 0.7)',
+    color: 'rgba(255, 255, 255, 0.5)',
     fontSize: 13,
-    fontWeight: '600',
+    fontWeight: '700',
+    fontFamily: 'Amiko-Bold',
+    letterSpacing: 0.5,
   },
   activeTabText: {
     color: '#fff',
+    textShadowColor: 'rgba(255, 255, 255, 0.6)',
+    textShadowOffset: { width: 0, height: 0 },
+    textShadowRadius: 6,
   },
   feedContainer: {
     flex: 1,
@@ -907,7 +995,7 @@ const styles = StyleSheet.create({
   },
   showsFeedContainer: {
     position: 'absolute',
-    top: 230, // Below header and tabs
+    top: 200, // Below header and tabs (adjusted for iPhone 16)
     left: 0,
     right: 0,
     bottom: 0,
@@ -922,31 +1010,88 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255, 255, 255, 0)', // Fully transparent
     marginBottom: 10,
   },
+  feedContentContainer: {
+    paddingBottom: 120, // Space for bottom tab bar
+  },
+  sectionHeader: {
+    paddingHorizontal: 20,
+    paddingTop: 8,
+    paddingBottom: 16,
+  },
+  sectionTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 4,
+  },
+  sectionTitle: {
+    fontSize: 22,
+    fontWeight: 'bold',
+    color: '#ffffff',
+    fontFamily: 'Audiowide-Regular',
+    textShadowColor: 'rgba(255, 0, 255, 0.3)',
+    textShadowOffset: { width: 0, height: 0 },
+    textShadowRadius: 10,
+  },
+  sectionCount: {
+    marginLeft: 10,
+    backgroundColor: 'rgba(255, 0, 255, 0.3)',
+    paddingHorizontal: 10,
+    paddingVertical: 3,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 0, 255, 0.5)',
+  },
+  sectionCountText: {
+    fontSize: 13,
+    color: '#fff',
+    fontFamily: 'Amiko-Bold',
+  },
+  sectionSubtitle: {
+    fontSize: 13,
+    color: 'rgba(255, 255, 255, 0.5)',
+    fontFamily: 'Amiko-Regular',
+  },
   emptyContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    paddingVertical: 100,
+    paddingVertical: 80,
+    paddingHorizontal: 40,
+  },
+  emptyIcon: {
+    fontSize: 48,
+    marginBottom: 16,
+  },
+  emptyTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#ffffff',
+    fontFamily: 'Amiko-Bold',
+    marginBottom: 8,
   },
   emptyText: {
-    fontSize: 16,
-    color: '#666',
+    fontSize: 14,
+    color: 'rgba(255, 255, 255, 0.5)',
     textAlign: 'center',
+    fontFamily: 'Amiko-Regular',
+    lineHeight: 20,
   },
   showCard: {
-    backgroundColor: 'rgba(255, 255, 255, 0.95)', // Slightly transparent white
+    backgroundColor: 'rgba(20, 20, 35, 0.9)',
     marginHorizontal: 15,
-    marginVertical: 8,
-    borderRadius: 12,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
+    marginVertical: 10,
+    borderRadius: 20,
+    shadowColor: '#ff00ff',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 12,
+    elevation: 6,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 0, 255, 0.15)',
   },
   showCardContent: {
     overflow: 'hidden',
-    borderRadius: 12,
+    borderRadius: 20,
   },
   showImageContainer: {
     position: 'relative',
@@ -982,28 +1127,39 @@ const styles = StyleSheet.create({
   },
   statusBadge: {
     position: 'absolute',
-    top: 10,
-    right: 10,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 12,
+    top: 12,
+    right: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 10,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
   },
   activeBadge: {
-    backgroundColor: '#50C878',
+    backgroundColor: '#00ff88',
+    shadowColor: '#00ff88',
+    shadowOpacity: 0.5,
   },
   pendingBadge: {
     backgroundColor: '#FFD700',
+    shadowColor: '#FFD700',
+    shadowOpacity: 0.5,
   },
   statusText: {
     fontSize: 10,
     fontWeight: 'bold',
-    color: '#fff',
+    color: '#000',
+    fontFamily: 'Amiko-Bold',
+    letterSpacing: 0.5,
   },
   showCardDetails: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    padding: 15,
+    padding: 16,
+    backgroundColor: 'rgba(10, 10, 20, 0.6)',
   },
   showCardInfo: {
     flex: 1,
@@ -1012,42 +1168,51 @@ const styles = StyleSheet.create({
   showHeadliner: {
     fontSize: 18,
     fontWeight: 'bold',
-    color: '#2a2882',
+    color: '#ffffff',
     marginBottom: 4,
+    fontFamily: 'Amiko-Bold',
   },
   showVenue: {
     fontSize: 14,
-    color: '#666',
-    marginBottom: 2,
+    color: '#ff00ff',
+    marginBottom: 4,
+    fontFamily: 'Amiko-Regular',
   },
   showDate: {
     fontSize: 12,
-    color: '#999',
+    color: 'rgba(255, 255, 255, 0.6)',
+    fontFamily: 'Amiko-Regular',
   },
   voteSection: {
     alignItems: 'center',
   },
   voteCount: {
-    fontSize: 16,
+    fontSize: 18,
     fontWeight: 'bold',
-    color: '#2a2882',
-    marginBottom: 5,
+    color: '#ffffff',
+    marginBottom: 6,
+    fontFamily: 'Audiowide-Regular',
   },
   voteButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: '#f0f0f0',
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(255, 0, 255, 0.15)',
     borderWidth: 2,
     borderColor: '#ff00ff',
     justifyContent: 'center',
     alignItems: 'center',
+    shadowColor: '#ff00ff',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.4,
+    shadowRadius: 6,
   },
   voteButtonActive: {
     backgroundColor: '#ff00ff',
+    shadowOpacity: 0.8,
   },
   voteButtonText: {
-    fontSize: 18,
+    fontSize: 20,
     fontWeight: 'bold',
     color: '#ff00ff',
   },
@@ -1056,26 +1221,28 @@ const styles = StyleSheet.create({
   },
   artistsFeedContainer: {
     position: 'absolute',
-    top: 230, // Below header and tabs
+    top: 200, // Below header and tabs (adjusted for iPhone 16)
     left: 0,
     right: 0,
     bottom: 0,
-    backgroundColor: 'transparent', // Artists feed transparent like S tab
+    backgroundColor: 'transparent',
   },
   artistCard: {
-    backgroundColor: 'rgba(255, 255, 255, 0.95)', // Slightly transparent white
+    backgroundColor: 'rgba(20, 20, 35, 0.9)',
     marginHorizontal: 15,
-    marginVertical: 8,
-    borderRadius: 12,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
+    marginVertical: 10,
+    borderRadius: 20,
+    shadowColor: '#8b00ff',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 12,
+    elevation: 6,
+    borderWidth: 1,
+    borderColor: 'rgba(139, 0, 255, 0.15)',
   },
   artistCardContent: {
     overflow: 'hidden',
-    borderRadius: 12,
+    borderRadius: 20,
   },
   artistImageContainer: {
     position: 'relative',
@@ -1111,28 +1278,39 @@ const styles = StyleSheet.create({
   },
   typeBadge: {
     position: 'absolute',
-    top: 10,
-    right: 10,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 12,
+    top: 12,
+    right: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 10,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
   },
   artistBadge: {
-    backgroundColor: '#FF6B35',
+    backgroundColor: '#ff00ff',
+    shadowColor: '#ff00ff',
+    shadowOpacity: 0.5,
   },
   bandBadge: {
-    backgroundColor: '#8E44AD',
+    backgroundColor: '#8b00ff',
+    shadowColor: '#8b00ff',
+    shadowOpacity: 0.5,
   },
   typeBadgeText: {
     fontSize: 10,
     fontWeight: 'bold',
     color: '#fff',
+    fontFamily: 'Amiko-Bold',
+    letterSpacing: 0.5,
   },
   artistCardDetails: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    padding: 15,
+    padding: 16,
+    backgroundColor: 'rgba(10, 10, 20, 0.6)',
   },
   artistCardInfo: {
     flex: 1,
@@ -1141,12 +1319,14 @@ const styles = StyleSheet.create({
   artistName: {
     fontSize: 18,
     fontWeight: 'bold',
-    color: '#2a2882',
+    color: '#ffffff',
     marginBottom: 4,
+    fontFamily: 'Amiko-Bold',
   },
   artistMetadata: {
     fontSize: 14,
-    color: '#666',
+    color: 'rgba(255, 255, 255, 0.6)',
+    fontFamily: 'Amiko-Regular',
   },
   ratingSection: {
     alignItems: 'center',
@@ -1156,39 +1336,50 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   averageRating: {
-    fontSize: 16,
+    fontSize: 18,
     fontWeight: 'bold',
-    color: '#2a2882',
+    color: '#ffffff',
     marginBottom: 4,
+    fontFamily: 'Audiowide-Regular',
   },
   ratingStars: {
     flexDirection: 'row',
   },
   star: {
-    fontSize: 14,
-    marginHorizontal: 1,
+    fontSize: 16,
+    marginHorizontal: 2,
+    textShadowColor: 'rgba(255, 215, 0, 0.5)',
+    textShadowOffset: { width: 0, height: 0 },
+    textShadowRadius: 4,
   },
   starFilled: {
     color: '#FFD700',
   },
   starEmpty: {
-    color: '#ddd',
+    color: 'rgba(255, 255, 255, 0.3)',
+    textShadowRadius: 0,
   },
   rateButton: {
-    backgroundColor: '#f0f0f0',
+    backgroundColor: 'rgba(139, 0, 255, 0.15)',
     borderWidth: 2,
-    borderColor: '#ff00ff',
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
+    borderColor: '#8b00ff',
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    shadowColor: '#8b00ff',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
   },
   rateButtonActive: {
-    backgroundColor: '#ff00ff',
+    backgroundColor: '#8b00ff',
+    shadowOpacity: 0.6,
   },
   rateButtonText: {
-    fontSize: 12,
+    fontSize: 13,
     fontWeight: 'bold',
-    color: '#ff00ff',
+    color: '#8b00ff',
+    fontFamily: 'Amiko-SemiBold',
   },
   rateButtonTextActive: {
     color: '#fff',
@@ -1199,58 +1390,131 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     bottom: 0,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    backgroundColor: 'rgba(0, 0, 0, 0.8)',
     justifyContent: 'center',
     alignItems: 'center',
     zIndex: 1000,
   },
   ratingModalContent: {
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    padding: 20,
+    backgroundColor: 'rgba(20, 20, 35, 0.95)',
+    borderRadius: 20,
+    padding: 24,
     alignItems: 'center',
-    minWidth: 200,
+    minWidth: 240,
+    borderWidth: 1,
+    borderColor: 'rgba(139, 0, 255, 0.3)',
+    shadowColor: '#8b00ff',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.4,
+    shadowRadius: 20,
   },
   ratingModalTitle: {
     fontSize: 18,
     fontWeight: 'bold',
-    color: '#2a2882',
-    marginBottom: 15,
+    color: '#ffffff',
+    marginBottom: 18,
+    fontFamily: 'Amiko-Bold',
+    textAlign: 'center',
   },
   ratingModalStars: {
     flexDirection: 'row',
-    marginBottom: 20,
+    marginBottom: 24,
+    gap: 8,
   },
   ratingModalClose: {
-    backgroundColor: '#ddd',
-    borderRadius: 8,
-    paddingHorizontal: 15,
-    paddingVertical: 8,
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    borderRadius: 12,
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.2)',
   },
   ratingModalCloseText: {
-    color: '#666',
+    color: 'rgba(255, 255, 255, 0.8)',
     fontWeight: '600',
+    fontFamily: 'Amiko-SemiBold',
+  },
+  ratingModalButtons: {
+    flexDirection: 'row',
+    gap: 12,
+    width: '100%',
+  },
+  ratingSubmitButton: {
+    flex: 1,
+    backgroundColor: '#ff00ff',
+    borderRadius: 12,
+    paddingVertical: 12,
+    alignItems: 'center',
+    shadowColor: '#ff00ff',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.5,
+    shadowRadius: 8,
+  },
+  ratingSubmitDisabled: {
+    backgroundColor: 'rgba(255, 0, 255, 0.3)',
+    shadowOpacity: 0,
+  },
+  ratingSubmitText: {
+    color: '#fff',
+    fontWeight: 'bold',
+    fontSize: 16,
+    fontFamily: 'Amiko-Bold',
+  },
+  selectedRatingText: {
+    color: '#FFD700',
+    fontSize: 16,
+    fontFamily: 'Amiko-SemiBold',
+    marginBottom: 16,
+  },
+  starTouchable: {
+    padding: 4,
+  },
+  modalStar: {
+    fontSize: 32,
+    marginHorizontal: 4,
+    textShadowColor: 'rgba(255, 215, 0, 0.8)',
+    textShadowOffset: { width: 0, height: 0 },
+    textShadowRadius: 8,
+  },
+  indicatorTouchable: {
+    padding: 6,
+  },
+  imageCountBadge: {
+    position: 'absolute',
+    top: 12,
+    left: 12,
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
+  },
+  imageCountText: {
+    color: '#fff',
+    fontSize: 11,
+    fontFamily: 'Amiko-SemiBold',
   },
   myLocationButton: {
     position: 'absolute',
     bottom: 120,
     right: 20,
-    width: 50,
-    height: 50,
-    backgroundColor: 'rgba(42, 40, 130, 0.95)',
-    borderRadius: 25,
+    width: 54,
+    height: 54,
+    backgroundColor: 'rgba(10, 10, 20, 0.9)',
+    borderRadius: 27,
     justifyContent: 'center',
     alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 3.84,
-    elevation: 5,
+    shadowColor: '#ff00ff',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.4,
+    shadowRadius: 12,
+    elevation: 8,
     zIndex: 500,
+    borderWidth: 2,
+    borderColor: 'rgba(255, 0, 255, 0.4)',
   },
   myLocationIcon: {
-    fontSize: 20,
-    color: '#fff',
+    fontSize: 22,
+    color: '#ff00ff',
   },
 });
 
@@ -1269,11 +1533,13 @@ const getHeadlinerFromMembers = (showMembers) => {
 const ShowCard = ({ show, hasVoted, onVote, onPress }) => {
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
   const [voteCount, setVoteCount] = useState(0);
+  const [isScrolling, setIsScrolling] = useState(false);
   const scrollViewRef = useRef(null);
-  
+  const scaleAnim = useRef(new Animated.Value(1)).current;
+
   // Use show images from members and venue
-  const displayImages = show.show_images && show.show_images.length > 0 
-    ? show.show_images 
+  const displayImages = show.show_images && show.show_images.length > 0
+    ? show.show_images
     : ['https://via.placeholder.com/300x200/2a2882/ffffff?text=Show+Image'];
 
   useEffect(() => {
@@ -1288,85 +1554,139 @@ const ShowCard = ({ show, hasVoted, onVote, onPress }) => {
     setCurrentImageIndex(index);
   };
 
-  return (
-    <TouchableOpacity style={styles.showCard} onPress={onPress}>
-      <View style={styles.showCardContent}>
-        {/* Image Section */}
-        <View style={styles.showImageContainer}>
-          <ScrollView
-            ref={scrollViewRef}
-            horizontal
-            pagingEnabled
-            showsHorizontalScrollIndicator={false}
-            onScroll={handleScroll}
-            scrollEventThrottle={16}
-          >
-            {displayImages.map((image, index) => (
-              <View key={index} style={styles.showImageSlide}>
-                <Image
-                  source={{ uri: image }}
-                  style={styles.showImage}
-                  resizeMode="cover"
-                />
-              </View>
-            ))}
-          </ScrollView>
-          
-          {/* Image Indicators */}
-          {displayImages.length > 1 && (
-            <View style={styles.showImageIndicators}>
-              {displayImages.map((_, index) => (
-                <View
-                  key={index}
-                  style={[
-                    styles.showImageIndicator,
-                    currentImageIndex === index && styles.showImageIndicatorActive,
-                  ]}
-                />
-              ))}
-            </View>
-          )}
-          
-          {/* Status Badge */}
-          <View style={[styles.statusBadge, show.show_status === 'active' ? styles.activeBadge : styles.pendingBadge]}>
-            <Text style={styles.statusText}>{(show.show_status || 'pending').toUpperCase()}</Text>
-          </View>
-        </View>
+  const handlePressIn = () => {
+    if (!isScrolling) {
+      Animated.spring(scaleAnim, {
+        toValue: 0.98,
+        useNativeDriver: true,
+      }).start();
+    }
+  };
 
-        {/* Content Section */}
-        <View style={styles.showCardDetails}>
-          <View style={styles.showCardInfo}>
-            <Text style={styles.showHeadliner} numberOfLines={1}>
-              {getHeadlinerFromMembers(show.show_members)}
-            </Text>
-            <Text style={styles.showVenue} numberOfLines={1}>
-              @ {show.venues?.venue_name || show.venue_name}
-            </Text>
-            {show.show_date && (
-              <Text style={styles.showDate}>
-                {new Date(show.show_date).toLocaleDateString()}
-              </Text>
+  const handlePressOut = () => {
+    Animated.spring(scaleAnim, {
+      toValue: 1,
+      friction: 3,
+      useNativeDriver: true,
+    }).start();
+  };
+
+  const handleCardPress = () => {
+    if (!isScrolling) {
+      onPress();
+    }
+  };
+
+  return (
+    <Animated.View style={[styles.showCard, { transform: [{ scale: scaleAnim }] }]}>
+      <TouchableOpacity
+        activeOpacity={0.95}
+        onPress={handleCardPress}
+        onPressIn={handlePressIn}
+        onPressOut={handlePressOut}
+      >
+        <View style={styles.showCardContent}>
+          {/* Image Section - Separate touch handling */}
+          <View style={styles.showImageContainer}>
+            <ScrollView
+              ref={scrollViewRef}
+              horizontal
+              pagingEnabled
+              nestedScrollEnabled={true}
+              directionalLockEnabled={true}
+              showsHorizontalScrollIndicator={false}
+              onScroll={handleScroll}
+              onScrollBeginDrag={() => setIsScrolling(true)}
+              onScrollEndDrag={() => setTimeout(() => setIsScrolling(false), 100)}
+              onMomentumScrollEnd={() => setIsScrolling(false)}
+              scrollEventThrottle={16}
+            >
+              {displayImages.map((image, index) => (
+                <View key={index} style={styles.showImageSlide}>
+                  <Image
+                    source={{ uri: image }}
+                    style={styles.showImage}
+                    resizeMode="cover"
+                  />
+                </View>
+              ))}
+            </ScrollView>
+
+            {/* Image Indicators */}
+            {displayImages.length > 1 && (
+              <View style={styles.showImageIndicators}>
+                {displayImages.map((_, index) => (
+                  <TouchableOpacity
+                    key={index}
+                    onPress={() => {
+                      scrollViewRef.current?.scrollTo({ x: index * (width - 30), animated: true });
+                      setCurrentImageIndex(index);
+                    }}
+                    style={styles.indicatorTouchable}
+                  >
+                    <View
+                      style={[
+                        styles.showImageIndicator,
+                        currentImageIndex === index && styles.showImageIndicatorActive,
+                      ]}
+                    />
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
+
+            {/* Status Badge */}
+            <View style={[styles.statusBadge, show.show_status === 'active' ? styles.activeBadge : styles.pendingBadge]}>
+              <Text style={styles.statusText}>{(show.show_status || 'pending').toUpperCase()}</Text>
+            </View>
+
+            {/* Image count indicator */}
+            {displayImages.length > 1 && (
+              <View style={styles.imageCountBadge}>
+                <Text style={styles.imageCountText}>{currentImageIndex + 1}/{displayImages.length}</Text>
+              </View>
             )}
           </View>
-          
-          {/* Vote Section */}
-          <View style={styles.voteSection}>
-            <Text style={styles.voteCount}>{voteCount}</Text>
-            <TouchableOpacity
-              style={[styles.voteButton, hasVoted && styles.voteButtonActive]}
-              onPress={(e) => {
-                e.stopPropagation();
-                onVote();
-              }}
-            >
-              <Text style={[styles.voteButtonText, hasVoted && styles.voteButtonTextActive]}>
-                {hasVoted ? '✓' : '+'}
+
+          {/* Content Section */}
+          <View style={styles.showCardDetails}>
+            <View style={styles.showCardInfo}>
+              <Text style={styles.showHeadliner} numberOfLines={1}>
+                {getHeadlinerFromMembers(show.show_members)}
               </Text>
-            </TouchableOpacity>
+              <Text style={styles.showVenue} numberOfLines={1}>
+                @ {show.venues?.venue_name || show.venue_name}
+              </Text>
+              {show.show_date && (
+                <Text style={styles.showDate}>
+                  {new Date(show.show_date).toLocaleDateString('en-US', {
+                    weekday: 'short',
+                    month: 'short',
+                    day: 'numeric'
+                  })}
+                </Text>
+              )}
+            </View>
+
+            {/* Vote Section */}
+            <View style={styles.voteSection}>
+              <Text style={styles.voteCount}>{voteCount}</Text>
+              <TouchableOpacity
+                style={[styles.voteButton, hasVoted && styles.voteButtonActive]}
+                onPress={(e) => {
+                  e.stopPropagation();
+                  onVote();
+                }}
+              >
+                <Text style={[styles.voteButtonText, hasVoted && styles.voteButtonTextActive]}>
+                  {hasVoted ? '✓' : '+'}
+                </Text>
+              </TouchableOpacity>
+            </View>
           </View>
         </View>
-      </View>
-    </TouchableOpacity>
+      </TouchableOpacity>
+    </Animated.View>
   );
 };
 
@@ -1375,8 +1695,11 @@ const ArtistCard = ({ artist, userRating, onRate, onPress }) => {
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
   const [averageRating, setAverageRating] = useState(0);
   const [showRatingModal, setShowRatingModal] = useState(false);
+  const [selectedRating, setSelectedRating] = useState(0);
+  const [isScrolling, setIsScrolling] = useState(false);
   const scrollViewRef = useRef(null);
-  
+  const scaleAnim = useRef(new Animated.Value(1)).current;
+
   const allImages = [artist.profile_image, ...(artist.secondary_images || [])].filter(Boolean);
   const displayImages = allImages.length > 0 ? allImages : ['https://via.placeholder.com/300x200/2a2882/ffffff?text=No+Image'];
 
@@ -1407,18 +1730,55 @@ const ArtistCard = ({ artist, userRating, onRate, onPress }) => {
     setCurrentImageIndex(index);
   };
 
+  const handlePressIn = () => {
+    if (!isScrolling) {
+      Animated.spring(scaleAnim, {
+        toValue: 0.98,
+        useNativeDriver: true,
+      }).start();
+    }
+  };
+
+  const handlePressOut = () => {
+    Animated.spring(scaleAnim, {
+      toValue: 1,
+      friction: 3,
+      useNativeDriver: true,
+    }).start();
+  };
+
+  const handleCardPress = () => {
+    if (!isScrolling) {
+      onPress();
+    }
+  };
+
+  const handleRatingSelect = (rating) => {
+    setSelectedRating(rating);
+  };
+
+  const handleRatingSubmit = () => {
+    if (selectedRating > 0) {
+      onRate(selectedRating);
+      setShowRatingModal(false);
+      setSelectedRating(0);
+    }
+  };
+
   const renderStars = (rating, interactive = false) => {
     const stars = [];
+    const displayRating = interactive ? selectedRating : rating;
     for (let i = 1; i <= 5; i++) {
       stars.push(
         <TouchableOpacity
           key={i}
           disabled={!interactive}
-          onPress={() => interactive && onRate(i)}
+          onPress={() => interactive && handleRatingSelect(i)}
+          style={styles.starTouchable}
         >
           <Text style={[
-            styles.star,
-            i <= rating ? styles.starFilled : styles.starEmpty
+            interactive ? styles.modalStar : styles.star,
+            i <= displayRating ? styles.starFilled : styles.starEmpty
           ]}>
             ★
           </Text>
@@ -1429,104 +1789,151 @@ const ArtistCard = ({ artist, userRating, onRate, onPress }) => {
   };
 
   return (
-    <TouchableOpacity style={styles.artistCard} onPress={onPress}>
-      <View style={styles.artistCardContent}>
-        {/* Image Section */}
-        <View style={styles.artistImageContainer}>
-          <ScrollView
-            ref={scrollViewRef}
-            horizontal
-            pagingEnabled
-            showsHorizontalScrollIndicator={false}
-            onScroll={handleScroll}
-            scrollEventThrottle={16}
-          >
-            {displayImages.map((image, index) => (
-              <View key={index} style={styles.artistImageSlide}>
-                <Image
-                  source={{ uri: image }}
-                  style={styles.artistImage}
-                  resizeMode="cover"
-                />
-              </View>
-            ))}
-          </ScrollView>
-          
-          {/* Image Indicators */}
-          {displayImages.length > 1 && (
-            <View style={styles.artistImageIndicators}>
-              {displayImages.map((_, index) => (
-                <View
-                  key={index}
-                  style={[
-                    styles.artistImageIndicator,
-                    currentImageIndex === index && styles.artistImageIndicatorActive,
-                  ]}
-                />
+    <Animated.View style={[styles.artistCard, { transform: [{ scale: scaleAnim }] }]}>
+      <TouchableOpacity
+        activeOpacity={0.95}
+        onPress={handleCardPress}
+        onPressIn={handlePressIn}
+        onPressOut={handlePressOut}
+      >
+        <View style={styles.artistCardContent}>
+          {/* Image Section */}
+          <View style={styles.artistImageContainer}>
+            <ScrollView
+              ref={scrollViewRef}
+              horizontal
+              pagingEnabled
+              nestedScrollEnabled={true}
+              directionalLockEnabled={true}
+              showsHorizontalScrollIndicator={false}
+              onScroll={handleScroll}
+              onScrollBeginDrag={() => setIsScrolling(true)}
+              onScrollEndDrag={() => setTimeout(() => setIsScrolling(false), 100)}
+              onMomentumScrollEnd={() => setIsScrolling(false)}
+              scrollEventThrottle={16}
+            >
+              {displayImages.map((image, index) => (
+                <View key={index} style={styles.artistImageSlide}>
+                  <Image
+                    source={{ uri: image }}
+                    style={styles.artistImage}
+                    resizeMode="cover"
+                  />
+                </View>
               ))}
-            </View>
-          )}
-          
-          {/* Type Badge */}
-          <View style={[styles.typeBadge, artist.type === 'artist' ? styles.artistBadge : styles.bandBadge]}>
-            <Text style={styles.typeBadgeText}>{artist.type.toUpperCase()}</Text>
-          </View>
-        </View>
+            </ScrollView>
 
-        {/* Content Section */}
-        <View style={styles.artistCardDetails}>
-          <View style={styles.artistCardInfo}>
-            <Text style={styles.artistName} numberOfLines={1}>
-              {artist.name}
-            </Text>
-            {artist.metadata && (
-              <Text style={styles.artistMetadata} numberOfLines={1}>
-                {artist.metadata}
-              </Text>
+            {/* Image Indicators */}
+            {displayImages.length > 1 && (
+              <View style={styles.artistImageIndicators}>
+                {displayImages.map((_, index) => (
+                  <TouchableOpacity
+                    key={index}
+                    onPress={() => {
+                      scrollViewRef.current?.scrollTo({ x: index * (width - 30), animated: true });
+                      setCurrentImageIndex(index);
+                    }}
+                    style={styles.indicatorTouchable}
+                  >
+                    <View
+                      style={[
+                        styles.artistImageIndicator,
+                        currentImageIndex === index && styles.artistImageIndicatorActive,
+                      ]}
+                    />
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
+
+            {/* Type Badge */}
+            <View style={[styles.typeBadge, artist.type === 'artist' ? styles.artistBadge : styles.bandBadge]}>
+              <Text style={styles.typeBadgeText}>{artist.type.toUpperCase()}</Text>
+            </View>
+
+            {/* Image count indicator */}
+            {displayImages.length > 1 && (
+              <View style={styles.imageCountBadge}>
+                <Text style={styles.imageCountText}>{currentImageIndex + 1}/{displayImages.length}</Text>
+              </View>
             )}
           </View>
-          
-          {/* Rating Section */}
-          <View style={styles.ratingSection}>
-            <View style={styles.ratingDisplay}>
-              <Text style={styles.averageRating}>{averageRating.toFixed(1)}</Text>
-              <View style={styles.ratingStars}>
-                {renderStars(Math.round(averageRating))}
-              </View>
-            </View>
-            <TouchableOpacity
-              style={[styles.rateButton, userRating && styles.rateButtonActive]}
-              onPress={(e) => {
-                e.stopPropagation();
-                setShowRatingModal(true);
-              }}
-            >
-              <Text style={[styles.rateButtonText, userRating && styles.rateButtonTextActive]}>
-                {userRating ? userRating : 'Rate'}
+
+          {/* Content Section */}
+          <View style={styles.artistCardDetails}>
+            <View style={styles.artistCardInfo}>
+              <Text style={styles.artistName} numberOfLines={1}>
+                {artist.name}
               </Text>
-            </TouchableOpacity>
+              {artist.metadata && (
+                <Text style={styles.artistMetadata} numberOfLines={1}>
+                  {artist.metadata}
+                </Text>
+              )}
+            </View>
+
+            {/* Rating Section */}
+            <View style={styles.ratingSection}>
+              <View style={styles.ratingDisplay}>
+                <Text style={styles.averageRating}>{averageRating.toFixed(1)}</Text>
+                <View style={styles.ratingStars}>
+                  {renderStars(Math.round(averageRating))}
+                </View>
+              </View>
+              <TouchableOpacity
+                style={[styles.rateButton, userRating && styles.rateButtonActive]}
+                onPress={(e) => {
+                  e.stopPropagation();
+                  setSelectedRating(userRating || 0);
+                  setShowRatingModal(true);
+                }}
+              >
+                <Text style={[styles.rateButtonText, userRating && styles.rateButtonTextActive]}>
+                  {userRating ? `${userRating}★` : 'Rate'}
+                </Text>
+              </TouchableOpacity>
+            </View>
           </View>
         </View>
-      </View>
-      
-      {/* Rating Modal */}
+      </TouchableOpacity>
+
+      {/* Rating Modal - Improved */}
       {showRatingModal && (
-        <View style={styles.ratingModal}>
+        <TouchableOpacity
+          style={styles.ratingModal}
+          activeOpacity={1}
+          onPress={() => setShowRatingModal(false)}
+        >
           <View style={styles.ratingModalContent}>
             <Text style={styles.ratingModalTitle}>Rate {artist.name}</Text>
             <View style={styles.ratingModalStars}>
               {renderStars(0, true)}
             </View>
-            <TouchableOpacity
-              style={styles.ratingModalClose}
-              onPress={() => setShowRatingModal(false)}
-            >
-              <Text style={styles.ratingModalCloseText}>Cancel</Text>
-            </TouchableOpacity>
+            {selectedRating > 0 && (
+              <Text style={styles.selectedRatingText}>{selectedRating} Star{selectedRating !== 1 ? 's' : ''}</Text>
+            )}
+            <View style={styles.ratingModalButtons}>
+              <TouchableOpacity
+                style={[styles.ratingSubmitButton, selectedRating === 0 && styles.ratingSubmitDisabled]}
+                onPress={handleRatingSubmit}
+                disabled={selectedRating === 0}
+              >
+                <Text style={styles.ratingSubmitText}>Submit</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.ratingModalClose}
+                onPress={() => {
+                  setShowRatingModal(false);
+                  setSelectedRating(0);
+                }}
+              >
+                <Text style={styles.ratingModalCloseText}>Cancel</Text>
+              </TouchableOpacity>
+            </View>
           </View>
-        </View>
+        </TouchableOpacity>
       )}
-    </TouchableOpacity>
+    </Animated.View>
   );
 };
 

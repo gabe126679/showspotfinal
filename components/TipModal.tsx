@@ -16,6 +16,8 @@ import {
 import { LinearGradient } from 'expo-linear-gradient';
 import { tipsService, EntityType, TipPayload } from '../services/tipsService';
 import { supabase } from '../lib/supabase';
+import { useUser } from '../context/userContext';
+import AuthPromptModal from './AuthPromptModal';
 
 interface TipModalProps {
   visible: boolean;
@@ -40,15 +42,36 @@ const TipModal: React.FC<TipModalProps> = ({
   const [tipMessage, setTipMessage] = useState<string>('');
   const [processing, setProcessing] = useState(false);
   const [currentUser, setCurrentUser] = useState<any>(null);
+  const [showAuthPrompt, setShowAuthPrompt] = useState(false);
 
+  const { isGuest, user } = useUser();
   const predefinedAmounts = tipsService.getPredefinedTipAmounts();
 
   useEffect(() => {
     if (visible) {
+      // If user is a guest, show auth prompt instead
+      if (isGuest || !user) {
+        setShowAuthPrompt(true);
+        return;
+      }
       getCurrentUser();
       resetForm();
     }
-  }, [visible]);
+  }, [visible, isGuest, user]);
+
+  // If showing auth prompt for guests
+  if (showAuthPrompt && visible) {
+    return (
+      <AuthPromptModal
+        visible={true}
+        onClose={() => {
+          setShowAuthPrompt(false);
+          onClose();
+        }}
+        action="tip"
+      />
+    );
+  }
 
   const getCurrentUser = async () => {
     try {

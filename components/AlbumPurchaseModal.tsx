@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Modal,
   View,
@@ -14,6 +14,8 @@ import {
 import { LinearGradient } from 'expo-linear-gradient';
 import { supabase } from '../lib/supabase';
 import { albumService, Album } from '../services/albumService';
+import { useUser } from '../context/userContext';
+import AuthPromptModal from './AuthPromptModal';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -31,6 +33,31 @@ const AlbumPurchaseModal: React.FC<AlbumPurchaseModalProps> = ({
   onPurchaseComplete,
 }) => {
   const [loading, setLoading] = useState(false);
+  const [showAuthPrompt, setShowAuthPrompt] = useState(false);
+  const { isGuest, user } = useUser();
+
+  useEffect(() => {
+    if (visible && album) {
+      // If user is a guest, show auth prompt instead
+      if (isGuest || !user) {
+        setShowAuthPrompt(true);
+      }
+    }
+  }, [visible, album, isGuest, user]);
+
+  // If showing auth prompt for guests
+  if (showAuthPrompt && visible) {
+    return (
+      <AuthPromptModal
+        visible={true}
+        onClose={() => {
+          setShowAuthPrompt(false);
+          onClose();
+        }}
+        action="purchase_album"
+      />
+    );
+  }
 
   const getImageUrl = (imagePath: string): string => {
     if (!imagePath) return 'https://via.placeholder.com/300';

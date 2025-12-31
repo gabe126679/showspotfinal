@@ -14,9 +14,9 @@ import {
   Platform,
   Vibration,
   Modal,
-  Alert,
 } from "react-native";
-import { PanGestureHandler, State } from 'react-native-gesture-handler';
+// No longer needed - using TouchableOpacity for collapse arrow
+// import { PanGestureHandler, State } from 'react-native-gesture-handler';
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useNavigation, CommonActions } from "@react-navigation/native";
 import { useRouter } from "expo-router";
@@ -25,6 +25,7 @@ import { LinearGradient } from "expo-linear-gradient";
 import ShowSpotHeader from "./ShowSpotHeader";
 import ShowVoteButton from "./ShowVoteButton";
 import RatingModal from "./RatingModal";
+import { ToastManager } from './Toast';
 import { ratingService, RatingInfo } from '../services/ratingService';
 import { followerService, FollowerInfo } from '../services/followerService';
 import TipModal from "./TipModal";
@@ -32,6 +33,14 @@ import PaymentDisclaimer from "./PaymentDisclaimer";
 import { formatShowDateTime } from '../utils/showDateDisplay';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get("window");
+
+// Responsive dimensions for iPhone 16+ and other modern devices
+const DIMS = {
+  GESTURE_THRESHOLD: Math.max(50, SCREEN_HEIGHT * 0.06),
+  SWIPE_VELOCITY_THRESHOLD: 0.5,
+  PANEL_HEADER_HEIGHT: Math.max(65, SCREEN_HEIGHT * 0.08),
+  ACTION_BUTTON_SIZE: Math.max(50, SCREEN_WIDTH * 0.12),
+};
 // iPhone 16 specific dimensions for gesture positioning - matching profile.tsx exactly
 const IPHONE_16_HEIGHT = 852; // iPhone 16 screen height
 const ACTUAL_TAB_BAR_HEIGHT = 85; // Bottom tab bar height
@@ -40,7 +49,7 @@ const HEADER_HEIGHT = 85;
 const FOOTER_HEIGHT = 85;
 const HANDLE_HEIGHT = 30;
 const TAB_HEIGHT = 80;
-const COLLAPSED_HEIGHT = 180;
+const COLLAPSED_HEIGHT = 250; // Moved up 50px per user request
 const COLLAPSED_TRANSLATE_Y = SCREEN_HEIGHT - COLLAPSED_HEIGHT - FOOTER_HEIGHT;
 // Optimized height for iPhone 16 - focus on images as primary visual
 const IMAGE_SECTION_HEIGHT = 610; // Matching artistPublicProfile exactly
@@ -115,6 +124,10 @@ const VenuePublicProfile: React.FC<VenuePublicProfileProps> = ({ route }) => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState(false);
+  const expandedRef = useRef(false); // Ref to avoid stale closure in panResponder
+  
+  // Simple gesture state tracking
+  const [scrollY, setScrollY] = useState(0);
   
   // Full-screen image modal - matching profile.tsx exactly
   const [showImageModal, setShowImageModal] = useState(false);
@@ -144,43 +157,44 @@ const VenuePublicProfile: React.FC<VenuePublicProfileProps> = ({ route }) => {
   // Initialize gesture handlers and animations - matching bandPublicProfile.tsx exactly
   const panResponder = useRef(
     PanResponder.create({
-      onMoveShouldSetPanResponder: (evt, gestureState) => {
-        return Math.abs(gestureState.dy) > 10;
+      onStartShouldSetPanResponder: () => {
+        // Never capture when expanded - let ScrollViews handle everything
+        return !expandedRef.current;
+      },
+      onMoveShouldSetPanResponder: (_, gestureState) => {
+        // Double-check: never respond when expanded, only upward swipes when collapsed
+        if (expandedRef.current) return false;
+        return gestureState.dy < -10 && Math.abs(gestureState.dy) > Math.abs(gestureState.dx);
       },
       onPanResponderGrant: () => {
-        if (Platform.OS === 'ios') {
-          try {
-            (Vibration as any).impact && (Vibration as any).impact('light');
-          } catch (error) {
-            // Fallback for older versions
-            Vibration.vibrate(50);
+        // No vibration - less annoying for users
+      },
+      onPanResponderMove: (_, gestureState) => {
+        // Only move if collapsed
+        if (!expandedRef.current && gestureState.dy < 0) {
+          const currentValue = COLLAPSED_TRANSLATE_Y;
+          const newValue = currentValue + gestureState.dy;
+          // Clamp between 0 (expanded) and COLLAPSED_TRANSLATE_Y (collapsed)
+          const constrainedValue = Math.max(0, Math.min(COLLAPSED_TRANSLATE_Y, newValue));
+          panelTranslateY.setValue(constrainedValue);
+        }
+      },
+      onPanResponderRelease: (_, gestureState) => {
+        // Only handle release if collapsed
+        if (!expandedRef.current) {
+          const shouldExpand = gestureState.dy < -50 || gestureState.vy < -0.5;
+
+          if (shouldExpand) {
+            expandPanel();
+          } else {
+            // Snap back to collapsed position
+            Animated.spring(panelTranslateY, {
+              toValue: COLLAPSED_TRANSLATE_Y,
+              useNativeDriver: true,
+              tension: 100,
+              friction: 8,
+            }).start();
           }
-        }
-      },
-      onPanResponderMove: (evt, gestureState) => {
-        if (!expanded && gestureState.dy < 0) {
-          // Swipe up to expand
-          const newValue = Math.max(0, COLLAPSED_TRANSLATE_Y + gestureState.dy);
-          panelTranslateY.setValue(newValue);
-        } else if (expanded && gestureState.dy > 0) {
-          // Swipe down to collapse
-          const newValue = Math.min(COLLAPSED_TRANSLATE_Y, gestureState.dy);
-          panelTranslateY.setValue(newValue);
-        }
-      },
-      onPanResponderRelease: (evt, gestureState) => {
-        if (!expanded && gestureState.dy < -50) {
-          // Expand panel on swipe up
-          expandPanel();
-        } else if (expanded && gestureState.dy > 50) {
-          // Collapse panel on swipe down
-          collapsePanel();
-        } else {
-          // Snap back to current state
-          Animated.spring(panelTranslateY, {
-            toValue: expanded ? 0 : COLLAPSED_TRANSLATE_Y,
-            useNativeDriver: false,
-          }).start();
         }
       },
     })
@@ -188,13 +202,14 @@ const VenuePublicProfile: React.FC<VenuePublicProfileProps> = ({ route }) => {
 
   const expandPanel = useCallback(() => {
     setExpanded(true);
-    
+    expandedRef.current = true; // Keep ref in sync
+
     Animated.parallel([
       Animated.spring(panelTranslateY, {
-        toValue: 0,
-        useNativeDriver: false,
+        toValue: 0, // Fully expanded
+        useNativeDriver: true,
         tension: 120,
-        friction: 7,
+        friction: 8,
         overshootClamping: false,
       }),
       Animated.timing(handleOpacity, {
@@ -212,19 +227,20 @@ const VenuePublicProfile: React.FC<VenuePublicProfileProps> = ({ route }) => {
 
   const collapsePanel = useCallback(() => {
     setExpanded(false);
-    
+    expandedRef.current = false; // Keep ref in sync
+
     // Collapse all tabs when panel closes
-    setTabs(prevTabs => 
+    setTabs(prevTabs =>
       prevTabs.map(tab => ({ ...tab, expanded: false }))
     );
-    
+
     Animated.parallel([
       Animated.spring(panelTranslateY, {
         toValue: COLLAPSED_TRANSLATE_Y,
-        useNativeDriver: false,
+        useNativeDriver: true,
         tension: 110,
         friction: 8,
-        overshootClamping: false,
+        overshootClamping: true, // Prevent overshoot for consistent positioning
       }),
       Animated.timing(handleOpacity, {
         toValue: 1,
@@ -239,24 +255,15 @@ const VenuePublicProfile: React.FC<VenuePublicProfileProps> = ({ route }) => {
     ]).start();
   }, [panelTranslateY, handleOpacity, nameOpacity]);
 
-  // Gesture handler for panel header swipe down - matching bandPublicProfile.tsx exactly
-  const handlePanelGesture = useCallback((event: any) => {
-    const { nativeEvent } = event;
-    
-    if (nativeEvent.state === State.END) {
-      const { translationY, velocityY } = nativeEvent;
-      
-      // Only allow swipe down when panel is expanded
-      if (expanded && (translationY > 50 || velocityY > 300)) {
-        collapsePanel();
-      }
+  // Handle arrow click to collapse panel
+  const handleCollapseArrowPress = useCallback(() => {
+    if (expanded) {
+      collapsePanel();
     }
   }, [expanded, collapsePanel]);
 
   const toggleTab = useCallback((tabId: string) => {
-    if (Platform.OS === 'ios') {
-      Vibration.vibrate(10);
-    }
+    // No vibration - smoother user experience
     
     setTabs(prevTabs => 
       prevTabs.map(tab => ({
@@ -349,7 +356,7 @@ const VenuePublicProfile: React.FC<VenuePublicProfileProps> = ({ route }) => {
   // Handle rating button press
   const handleRatingPress = () => {
     if (!currentUser) {
-      Alert.alert('Not Logged In', 'Please log in to rate this venue.');
+      ToastManager.error('Please log in to rate this venue');
       return;
     }
     setShowRatingModal(true);
@@ -376,7 +383,7 @@ const VenuePublicProfile: React.FC<VenuePublicProfileProps> = ({ route }) => {
   // Handle follow button press
   const handleFollowPress = async () => {
     if (!currentUser) {
-      Alert.alert('Not Logged In', 'Please log in to follow this venue.');
+      ToastManager.error('Please log in to follow this venue');
       return;
     }
 
@@ -386,11 +393,11 @@ const VenuePublicProfile: React.FC<VenuePublicProfileProps> = ({ route }) => {
         setFollowerInfo(result.data);
         setIsFollowing(result.data.userIsFollowing);
       } else {
-        Alert.alert('Error', result.error || 'Failed to update follow status');
+        ToastManager.error(result.error || 'Failed to update follow status');
       }
     } catch (error) {
       console.error('Error toggling follow:', error);
-      Alert.alert('Error', 'Failed to update follow status');
+      ToastManager.error('Failed to update follow status');
     }
   };
 
@@ -726,8 +733,8 @@ const VenuePublicProfile: React.FC<VenuePublicProfileProps> = ({ route }) => {
         />
       </View>
 
-      {/* Main content area with fixed height */}
-      <View style={styles.mainContent} {...panResponder.panHandlers}>
+      {/* Main content area with conditional pan handlers */}
+      <View style={styles.mainContent} {...(!expanded ? panResponder.panHandlers : {})}>
         
         {/* Image section with fixed height */}
         <View style={styles.imageSection}>
@@ -846,23 +853,49 @@ const VenuePublicProfile: React.FC<VenuePublicProfileProps> = ({ route }) => {
             },
           ]}
         >
-          {/* Name header inside panel with swipe down gesture */}
-          <PanGestureHandler onHandlerStateChange={handlePanelGesture}>
-            <LinearGradient
-              colors={["#2a2882", "#ff00ff"]}
-              style={styles.panelHeader}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 0 }}
+          {/* Name header inside panel with clickable collapse arrow */}
+          <LinearGradient
+            colors={["#2a2882", "#ff00ff"]}
+            style={styles.panelHeader}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 0 }}
+          >
+            {/* Visual handle indicator */}
+            <View style={styles.panelHandle} />
+
+            {/* Clickable venue name - collapses when expanded */}
+            <TouchableOpacity
+              onPress={expanded ? handleCollapseArrowPress : undefined}
+              activeOpacity={expanded ? 0.7 : 1}
+              style={styles.nameClickableArea}
             >
               <Text style={styles.nameTextInside} numberOfLines={1}>
                 {currentData.name}
               </Text>
-              {/* Add subtle visual indicator for swipe down */}
-              {expanded && (
-                <Text style={styles.swipeDownIndicator}>▼</Text>
-              )}
-            </LinearGradient>
-          </PanGestureHandler>
+              <Text style={styles.venueIcon}>🏛️</Text>
+            </TouchableOpacity>
+
+            {/* Swipe hint - only show when collapsed */}
+            {!expanded && (
+              <View style={styles.swipeHintContainer}>
+                <Text style={styles.swipeHintArrow}>▲</Text>
+                <Text style={styles.swipeHintText}>Swipe up for details</Text>
+                <Text style={styles.swipeHintArrow}>▲</Text>
+              </View>
+            )}
+
+            {/* Clickable collapse arrow - only show when expanded */}
+            {expanded && (
+              <TouchableOpacity
+                style={styles.collapseArrowButton}
+                onPress={handleCollapseArrowPress}
+                activeOpacity={0.7}
+                hitSlop={{ top: 15, bottom: 15, left: 15, right: 15 }}
+              >
+                <Text style={styles.collapseArrowText}>▼</Text>
+              </TouchableOpacity>
+            )}
+          </LinearGradient>
 
           {/* Scrollable tabs */}
           <ScrollView
@@ -895,6 +928,31 @@ const VenuePublicProfile: React.FC<VenuePublicProfileProps> = ({ route }) => {
                 )}
               </View>
             ))}
+            
+            {/* Venue Rating Footer */}
+            <View style={styles.panelFooter}>
+              <Text style={styles.ratingTitle}>Venue Rating</Text>
+              <View style={styles.starsContainer}>
+                {[1, 2, 3, 4, 5].map((star) => (
+                  <Text 
+                    key={star} 
+                    style={[
+                      styles.starIcon,
+                      {
+                        color: star <= Math.round(ratingInfo?.currentRating || 0) 
+                          ? '#FFD700' // Gold for filled stars
+                          : '#E0E0E0'  // Gray for empty stars
+                      }
+                    ]}
+                  >
+                    ★
+                  </Text>
+                ))}
+              </View>
+              <Text style={styles.ratingDetails}>
+                {ratingInfo ? ratingInfo.currentRating.toFixed(1) : '0.0'} out of 5 • {ratingInfo?.totalRaters || 0} rating{(ratingInfo?.totalRaters || 0) !== 1 ? 's' : ''}
+              </Text>
+            </View>
           </ScrollView>
 
         </Animated.View>
@@ -1070,7 +1128,7 @@ const styles = StyleSheet.create({
     top: COLLAPSED_HEIGHT - 50,
     left: 0,
     right: 0,
-    bottom: FOOTER_HEIGHT - 170,
+    bottom: 0, // Cover full screen when expanded
     backgroundColor: "#fff",
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
@@ -1082,13 +1140,14 @@ const styles = StyleSheet.create({
     zIndex: 10,
   },
   panelHeader: {
-    paddingVertical: 32.5,
+    paddingVertical: Math.max(32.5, DIMS.PANEL_HEADER_HEIGHT * 0.4),
     alignItems: "center",
     flexDirection: "row",
     justifyContent: "center",
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
     position: 'relative',
+    minHeight: DIMS.PANEL_HEADER_HEIGHT,
   },
   nameTextInside: {
     fontSize: 24,
@@ -1098,13 +1157,6 @@ const styles = StyleSheet.create({
     textShadowColor: "rgba(0, 0, 0, 0.75)",
     textShadowOffset: { width: 1, height: 1 },
     textShadowRadius: 2,
-  },
-  swipeDownIndicator: {
-    fontSize: 16,
-    color: "rgba(255, 255, 255, 0.7)",
-    fontWeight: "bold",
-    position: "absolute",
-    left: 20,
   },
   ownerBadge: {
     backgroundColor: '#ff00ff',
@@ -1127,41 +1179,57 @@ const styles = StyleSheet.create({
   dropdownTab: {
     height: TAB_HEIGHT,
     borderBottomWidth: 1,
-    borderColor: "#f0f0f0",
+    borderColor: "rgba(0, 0, 0, 0.06)",
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    paddingHorizontal: 20,
+    paddingHorizontal: 24,
     backgroundColor: "#fff",
   },
   dropdownTabExpanded: {
-    backgroundColor: "#f8f8f8",
+    backgroundColor: "rgba(255, 0, 255, 0.04)",
     borderBottomColor: "#ff00ff",
+    borderBottomWidth: 2,
   },
   lastTab: {
     borderBottomWidth: 0,
   },
   dropdownText: {
-    fontSize: 18,
-    fontFamily: "Amiko-Regular",
-    color: "#333",
+    fontSize: 17,
+    fontFamily: "Amiko-SemiBold",
+    color: "#2a2882",
     textTransform: "capitalize",
-    fontWeight: "500",
+    letterSpacing: 0.5,
   },
   arrow: {
-    fontSize: 16,
+    fontSize: 14,
     color: "#ff00ff",
     fontWeight: "bold",
+    width: 28,
+    height: 28,
+    textAlign: 'center',
+    lineHeight: 28,
+    backgroundColor: 'rgba(255, 0, 255, 0.1)',
+    borderRadius: 14,
+    overflow: 'hidden',
   },
   dropdownContent: {
-    backgroundColor: "#fff",
-    paddingHorizontal: 20,
-    paddingVertical: 15,
-    borderBottomWidth: 1,
-    borderColor: "#f0f0f0",
+    backgroundColor: "rgba(250, 250, 255, 0.5)",
+    paddingHorizontal: 12,
+    paddingVertical: 12,
   },
   tabContent: {
-    flex: 1,
+    backgroundColor: "rgba(250, 250, 255, 1)",
+    paddingHorizontal: 24,
+    paddingVertical: 20,
+    borderBottomWidth: 1,
+    borderColor: "rgba(255, 0, 255, 0.1)",
+    borderLeftWidth: 3,
+    borderLeftColor: "rgba(255, 0, 255, 0.3)",
+    marginLeft: 12,
+    marginRight: 12,
+    marginBottom: 8,
+    borderRadius: 8,
   },
   infoContainer: {
     flex: 1,
@@ -1222,7 +1290,7 @@ const styles = StyleSheet.create({
   },
   nameContainer: {
     position: 'absolute',
-    bottom: 140, // Position above the collapsed tabs panel
+    bottom: 20, // Lowered to match artist/band profiles
     left: 20,
     zIndex: 10,
   },
@@ -1236,11 +1304,10 @@ const styles = StyleSheet.create({
     fontFamily: 'Audiowide-Regular',
     color: '#fff',
   },
-  // Modern action buttons styles - matching bandPublicProfile.tsx
-  // Instagram-style action buttons
+  // Instagram-style action buttons - positioned above panel, avoiding follow button
   modernActionContainer: {
     position: 'absolute',
-    bottom: 140,
+    bottom: COLLAPSED_HEIGHT - 50,
     right: 20,
     alignItems: 'center',
     zIndex: 1000,
@@ -1345,15 +1412,17 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingVertical: 12,
-    paddingHorizontal: 15,
-    backgroundColor: '#f8f9fa',
-    marginBottom: 8,
-    borderRadius: 8,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 2,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    backgroundColor: 'rgba(255, 255, 255, 0.95)',
+    marginBottom: 10,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(42, 40, 130, 0.08)',
+    shadowColor: '#2a2882',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
     elevation: 2,
   },
   showInfo: {
@@ -1361,23 +1430,25 @@ const styles = StyleSheet.create({
     marginRight: 10,
   },
   showTitle: {
-    fontSize: 16,
-    fontFamily: 'Amiko-Regular',
-    color: '#333',
-    fontWeight: '600',
-    marginBottom: 4,
+    fontSize: 17,
+    fontFamily: 'Amiko-SemiBold',
+    color: '#2a2882',
+    marginBottom: 6,
+    letterSpacing: 0.3,
   },
   showDate: {
-    fontSize: 14,
+    fontSize: 13,
     fontFamily: 'Amiko-Regular',
-    color: '#666',
-    marginBottom: 2,
+    color: '#888',
+    marginBottom: 4,
+    letterSpacing: 0.2,
   },
   showStatus: {
     fontSize: 12,
-    fontFamily: 'Amiko-Regular',
-    color: '#2a2882',
-    fontWeight: '600',
+    fontFamily: 'Amiko-SemiBold',
+    color: '#ff00ff',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
   },
   showLineup: {
     fontSize: 12,
@@ -1458,6 +1529,111 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontFamily: 'Amiko-Regular',
     fontWeight: '700',
+  },
+  
+  // New styles for improved UX
+  nameClickableArea: {
+    flex: 1,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingVertical: 8,
+  },
+  venueIcon: {
+    fontSize: 18,
+    color: "#fff",
+    marginLeft: 8,
+  },
+  panelHandle: {
+    width: 50,
+    height: 4,
+    backgroundColor: 'rgba(255, 255, 255, 0.5)',
+    borderRadius: 2,
+    marginBottom: 4,
+  },
+  collapseArrowButton: {
+    paddingVertical: 8,
+    paddingHorizontal: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  collapseArrowText: {
+    fontSize: 14,
+    color: "rgba(255, 255, 255, 0.8)",
+    fontWeight: "bold",
+  },
+  // Swipe hint positioned at bottom of panel header
+  swipeHintContainer: {
+    position: 'absolute',
+    bottom: 8,
+    left: 0,
+    right: 0,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 6,
+  },
+  swipeHintText: {
+    fontSize: 11,
+    color: 'rgba(255, 255, 255, 0.7)',
+    fontFamily: 'Amiko-Regular',
+    letterSpacing: 0.5,
+  },
+  swipeHintArrow: {
+    fontSize: 10,
+    color: 'rgba(255, 255, 255, 0.7)',
+  },
+  
+  // Venue Rating Footer styles - Premium design matching band/artist profiles
+  panelFooter: {
+    paddingVertical: 28,
+    paddingHorizontal: 24,
+    alignItems: 'center',
+    backgroundColor: 'rgba(42, 40, 130, 0.08)',
+    marginTop: 20,
+    marginHorizontal: 12,
+    marginBottom: 20,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 0, 255, 0.15)',
+    shadowColor: '#ff00ff',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 12,
+    elevation: 4,
+  },
+  ratingTitle: {
+    fontSize: 16,
+    fontFamily: 'Amiko-SemiBold',
+    color: '#2a2882',
+    marginBottom: 14,
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
+  },
+  starsContainer: {
+    flexDirection: 'row',
+    marginBottom: 12,
+    padding: 8,
+    backgroundColor: 'rgba(255, 255, 255, 0.8)',
+    borderRadius: 16,
+    shadowColor: '#ff00ff',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 8,
+    elevation: 3,
+  },
+  starIcon: {
+    fontSize: 28,
+    marginHorizontal: 3,
+    textShadowColor: 'rgba(255, 0, 255, 0.4)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 4,
+  },
+  ratingDetails: {
+    fontSize: 13,
+    fontFamily: 'Amiko-Regular',
+    color: '#666',
+    textAlign: 'center',
   },
 });
 

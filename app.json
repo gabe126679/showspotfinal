@@ -3,10 +3,10 @@
     "name": "ShowSpot",
     "slug": "showspot",
     "version": "1.0.3",
+    "scheme": "showspot",
     "orientation": "portrait",
     "icon": "./assets/showspoticon.png",
     "userInterfaceStyle": "light",
-    "newArchEnabled": false,
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
@@ -14,7 +14,7 @@
     },
     "ios": {
       "bundleIdentifier": "com.showspot.app",
-      "buildNumber": "13",
+      "buildNumber": "14",
       "supportsTablet": false,
       "requireFullScreen": true,
       "jsEngine": "jsc",
@@ -23,7 +23,12 @@
         "NSLocationWhenInUseUsageDescription": "ShowSpot uses your location to discover live music venues and shows near you.",
         "NSCameraUsageDescription": "ShowSpot needs camera access to let you upload profile photos and venue images.",
         "NSPhotoLibraryUsageDescription": "ShowSpot needs access to your photos to let you upload profile and venue images.",
-        "ITSAppUsesNonExemptEncryption": false
+        "ITSAppUsesNonExemptEncryption": false,
+        "CFBundleURLTypes": [
+          {
+            "CFBundleURLSchemes": ["com.showspot.app", "showspot"]
+          }
+        ]
       }
     },
     "android": {
@@ -39,6 +44,21 @@
         "CAMERA",
         "READ_EXTERNAL_STORAGE",
         "WRITE_EXTERNAL_STORAGE"
+      ],
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "autoVerify": true,
+          "data": [
+            {
+              "scheme": "showspot"
+            },
+            {
+              "scheme": "com.showspot.app"
+            }
+          ],
+          "category": ["BROWSABLE", "DEFAULT"]
+        }
       ]
     },
     "web": {

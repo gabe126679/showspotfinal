@@ -14,9 +14,9 @@ import {
   Platform,
   Vibration,
   Modal,
-  Alert,
 } from "react-native";
-import { PanGestureHandler, State } from 'react-native-gesture-handler';
+// No longer needed - using TouchableOpacity for collapse arrow
+// import { PanGestureHandler, State } from 'react-native-gesture-handler';
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useNavigation, CommonActions } from "@react-navigation/native";
 import { useRouter } from "expo-router";
@@ -27,6 +27,7 @@ import ShowSpotHeader from "./ShowSpotHeader";
 import SongPurchaseModal from "./SongPurchaseModal";
 import AlbumPurchaseModal from "./AlbumPurchaseModal";
 import SongUploadForm from "./SongUploadForm";
+import { ToastManager } from './Toast';
 import ShowVoteButton from "./ShowVoteButton";
 import { backlinesService } from "../services/backlinesService";
 import RatingModal from "./RatingModal";
@@ -39,6 +40,14 @@ import AlbumImageUploadModal from "./AlbumImageUploadModal";
 import { albumService, Album } from '../services/albumService';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get("window");
+
+// Responsive dimensions for iPhone 16+ and other modern devices
+const DIMS = {
+  GESTURE_THRESHOLD: Math.max(50, SCREEN_HEIGHT * 0.06),
+  SWIPE_VELOCITY_THRESHOLD: 0.5,
+  PANEL_HEADER_HEIGHT: Math.max(65, SCREEN_HEIGHT * 0.08),
+  ACTION_BUTTON_SIZE: Math.max(50, SCREEN_WIDTH * 0.12),
+};
 // iPhone 16 specific dimensions for gesture positioning - matching profile.tsx exactly
 const IPHONE_16_HEIGHT = 852; // iPhone 16 screen height
 const ACTUAL_TAB_BAR_HEIGHT = 85; // Bottom tab bar height
@@ -47,10 +56,11 @@ const HEADER_HEIGHT = 85;
 const FOOTER_HEIGHT = 85;
 const HANDLE_HEIGHT = 30;
 const TAB_HEIGHT = 80;
-const COLLAPSED_HEIGHT = 150; // Reduced to eliminate gap
+// Panel sizing - matching artistPublicProfile.tsx exactly
+const COLLAPSED_HEIGHT = 265; // Moved down 50px per user request
 const COLLAPSED_TRANSLATE_Y = SCREEN_HEIGHT - COLLAPSED_HEIGHT - FOOTER_HEIGHT;
-// Optimized height for iPhone 16 - removes white gap
-const IMAGE_SECTION_HEIGHT = 610; // Further increased to eliminate white space
+// Optimized height for iPhone 16 - matching artistPublicProfile
+const IMAGE_SECTION_HEIGHT = 610;
 
 interface Song {
   song_id: string;
@@ -149,6 +159,12 @@ const BandPublicProfile: React.FC<BandPublicProfileProps> = ({ route }) => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState(false);
+
+  // Ref to track expanded state for panResponder (avoids stale closure)
+  const expandedRef = useRef(false);
+  
+  // Simple gesture state tracking
+  const [scrollY, setScrollY] = useState(0);
   
   // Song upload form state
   const [showSongUploadForm, setShowSongUploadForm] = useState(false);
@@ -279,7 +295,7 @@ const BandPublicProfile: React.FC<BandPublicProfileProps> = ({ route }) => {
   // Handle rating button press
   const handleRatingPress = () => {
     if (!currentUser) {
-      Alert.alert('Not Logged In', 'Please log in to rate this band.');
+      ToastManager.error('Please log in to rate this band');
       return;
     }
     setShowRatingModal(true);
@@ -306,7 +322,7 @@ const BandPublicProfile: React.FC<BandPublicProfileProps> = ({ route }) => {
   // Handle follow button press
   const handleFollowPress = async () => {
     if (!currentUser) {
-      Alert.alert('Not Logged In', 'Please log in to follow this band.');
+      ToastManager.error('Please log in to follow this band');
       return;
     }
 
@@ -316,11 +332,11 @@ const BandPublicProfile: React.FC<BandPublicProfileProps> = ({ route }) => {
         setFollowerInfo(result.data);
         setIsFollowing(result.data.userIsFollowing);
       } else {
-        Alert.alert('Error', result.error || 'Failed to update follow status');
+        ToastManager.error(result.error || 'Failed to update follow status');
       }
     } catch (error) {
       console.error('Error toggling follow:', error);
-      Alert.alert('Error', 'Failed to update follow status');
+      ToastManager.error('Failed to update follow status');
     }
   };
 
@@ -333,14 +349,32 @@ const BandPublicProfile: React.FC<BandPublicProfileProps> = ({ route }) => {
       const { data: { session } } = await supabase.auth.getSession();
       setCurrentUser(session?.user);
 
-      // Get band data
-      const { data: band, error: bandError } = await supabase
+      // Get band data - try by band_id first, then by band_creator as fallback
+      let { data: band, error: bandError } = await supabase
         .from('bands')
         .select('*')
         .eq('band_id', band_id)
-        .single();
+        .maybeSingle();
 
       if (bandError) throw bandError;
+
+      // If not found by band_id, try finding by band_creator (user ID)
+      if (!band) {
+        console.log('Band not found by band_id, trying band_creator...');
+        const { data: bandByCreator, error: creatorError } = await supabase
+          .from('bands')
+          .select('*')
+          .eq('band_creator', band_id)
+          .maybeSingle();
+
+        if (creatorError) throw creatorError;
+        band = bandByCreator;
+      }
+
+      if (!band) throw new Error('Band not found');
+
+      // Use the actual band_id for subsequent queries
+      const actualBandId = band.band_id;
       setBandData(band);
 
       // Initialize permission variables
@@ -631,47 +665,48 @@ const BandPublicProfile: React.FC<BandPublicProfileProps> = ({ route }) => {
     fetchBandData();
   }, [band_id, fadeAnim]);
 
-  // Pan responder for gesture handling - exactly matching profile.tsx
+  // Simple pan responder - ONLY active when panel is collapsed
+  // Uses expandedRef to avoid stale closure issues
   const panResponder = useRef(
     PanResponder.create({
-      onStartShouldSetPanResponder: () => true,
+      onStartShouldSetPanResponder: () => {
+        // Never capture when expanded - let ScrollViews handle everything
+        return !expandedRef.current;
+      },
       onMoveShouldSetPanResponder: (_, gestureState) => {
-        return Math.abs(gestureState.dy) > 10;
+        // Double-check: never respond when expanded, only upward swipes when collapsed
+        if (expandedRef.current) return false;
+        return gestureState.dy < -10 && Math.abs(gestureState.dy) > Math.abs(gestureState.dx);
       },
       onPanResponderGrant: () => {
-        if (Platform.OS === 'ios') {
-          Vibration.vibrate(10);
-        }
+        // No vibration - less annoying for users
       },
       onPanResponderMove: (_, gestureState) => {
-        const currentValue = expanded ? 0 : COLLAPSED_TRANSLATE_Y;
-        const newValue = currentValue + gestureState.dy;
-        const constrainedValue = Math.max(0, Math.min(COLLAPSED_TRANSLATE_Y, newValue));
-        panelTranslateY.setValue(constrainedValue);
+        // Only move if collapsed
+        if (!expandedRef.current && gestureState.dy < 0) {
+          const currentValue = COLLAPSED_TRANSLATE_Y;
+          const newValue = currentValue + gestureState.dy;
+          // Clamp between 0 (expanded) and COLLAPSED_TRANSLATE_Y (collapsed)
+          const constrainedValue = Math.max(0, Math.min(COLLAPSED_TRANSLATE_Y, newValue));
+          panelTranslateY.setValue(constrainedValue);
+        }
       },
       onPanResponderRelease: (_, gestureState) => {
-        const SWIPE_THRESHOLD = 100;
-        const velocity = gestureState.vy;
-        
-        const shouldExpand = !expanded && (
-          gestureState.dy < -SWIPE_THRESHOLD || velocity < -0.5
-        );
-        const shouldCollapse = expanded && (
-          gestureState.dy > SWIPE_THRESHOLD || velocity > 0.5
-        );
+        // Only handle release if collapsed
+        if (!expandedRef.current) {
+          const shouldExpand = gestureState.dy < -50 || gestureState.vy < -0.5;
 
-        if (shouldExpand) {
-          expandPanel();
-        } else if (shouldCollapse) {
-          collapsePanel();
-        } else {
-          const targetValue = expanded ? 0 : COLLAPSED_TRANSLATE_Y;
-          Animated.spring(panelTranslateY, {
-            toValue: targetValue,
-            useNativeDriver: true,
-            tension: 100,
-            friction: 8,
-          }).start();
+          if (shouldExpand) {
+            expandPanel();
+          } else {
+            // Snap back to collapsed position
+            Animated.spring(panelTranslateY, {
+              toValue: COLLAPSED_TRANSLATE_Y,
+              useNativeDriver: true,
+              tension: 100,
+              friction: 8,
+            }).start();
+          }
         }
       },
     })
@@ -679,13 +714,14 @@ const BandPublicProfile: React.FC<BandPublicProfileProps> = ({ route }) => {
 
   const expandPanel = useCallback(() => {
     setExpanded(true);
-    
+    expandedRef.current = true; // Keep ref in sync
+
     Animated.parallel([
       Animated.spring(panelTranslateY, {
-        toValue: 0,
+        toValue: 0, // Fully expanded
         useNativeDriver: true,
         tension: 120,
-        friction: 7,
+        friction: 8,
         overshootClamping: false,
       }),
       Animated.timing(handleOpacity, {
@@ -703,19 +739,20 @@ const BandPublicProfile: React.FC<BandPublicProfileProps> = ({ route }) => {
 
   const collapsePanel = useCallback(() => {
     setExpanded(false);
-    
+    expandedRef.current = false; // Keep ref in sync
+
     // Collapse all tabs when panel closes
-    setTabs(prevTabs => 
+    setTabs(prevTabs =>
       prevTabs.map(tab => ({ ...tab, expanded: false }))
     );
-    
+
     Animated.parallel([
       Animated.spring(panelTranslateY, {
         toValue: COLLAPSED_TRANSLATE_Y,
         useNativeDriver: true,
         tension: 110,
         friction: 8,
-        overshootClamping: false,
+        overshootClamping: true, // Prevent overshoot for consistent positioning
       }),
       Animated.timing(handleOpacity, {
         toValue: 1,
@@ -730,22 +767,15 @@ const BandPublicProfile: React.FC<BandPublicProfileProps> = ({ route }) => {
     ]).start();
   }, [panelTranslateY, handleOpacity, nameOpacity]);
 
-  // Gesture handler for panel header swipe down
-  const handlePanelGesture = useCallback((event: any) => {
-    if (event.nativeEvent.state === State.END) {
-      const { translationY, velocityY } = event.nativeEvent;
-      
-      // Only allow swipe down when panel is expanded
-      if (expanded && (translationY > 50 || velocityY > 300)) {
-        collapsePanel();
-      }
+  // Handle arrow click to collapse panel
+  const handleCollapseArrowPress = useCallback(() => {
+    if (expanded) {
+      collapsePanel();
     }
   }, [expanded, collapsePanel]);
 
   const toggleTab = useCallback((tabId: string) => {
-    if (Platform.OS === 'ios') {
-      Vibration.vibrate(10);
-    }
+    // No vibration - smoother user experience
     
     setTabs(prevTabs =>
       prevTabs.map(tab =>
@@ -1100,7 +1130,7 @@ const BandPublicProfile: React.FC<BandPublicProfileProps> = ({ route }) => {
                 onPress={() => {
                   console.log('Create Album clicked. Current user artist ID:', currentUserArtistId);
                   if (!currentUserArtistId) {
-                    Alert.alert('Error', 'Unable to create album. Your artist profile is not properly linked to this band.');
+                    ToastManager.error('Unable to create album. Your artist profile is not properly linked to this band.');
                     return;
                   }
                   setShowAlbumCreationModal(true);
@@ -1378,7 +1408,7 @@ const BandPublicProfile: React.FC<BandPublicProfileProps> = ({ route }) => {
       {/* Profile image section - matching profile.tsx exactly */}
       <Animated.View 
         style={[styles.imageSection, { opacity: fadeAnim }]} 
-        {...panResponder.panHandlers}
+        {...(!expanded ? panResponder.panHandlers : {})}
       >
         {currentData.images.length > 0 ? (
           currentData.images.length > 1 ? (
@@ -1491,8 +1521,8 @@ const BandPublicProfile: React.FC<BandPublicProfileProps> = ({ route }) => {
           )}
           
           {/* Rating button below */}
-          <TouchableOpacity 
-            style={styles.instagramActionButton} 
+          <TouchableOpacity
+            style={styles.instagramActionButton}
             onPress={handleRatingPress}
             activeOpacity={0.7}
           >
@@ -1504,6 +1534,30 @@ const BandPublicProfile: React.FC<BandPublicProfileProps> = ({ route }) => {
               </Text>
             </View>
           </TouchableOpacity>
+
+          {/* Promote this band in a show button - only show if not owner */}
+          {!isOwner && (
+            <TouchableOpacity
+              style={styles.instagramActionButton}
+              onPress={() => {
+                navigation.navigate('BottomTabs' as never, {
+                  screen: 'Create',
+                  params: {
+                    preSelectedBand: {
+                      band_id: band_id,
+                      band_name: currentData.name
+                    }
+                  }
+                } as never);
+              }}
+              activeOpacity={0.7}
+            >
+              <View style={styles.instagramButtonInner}>
+                <Text style={styles.instagramPlusIcon}>🎸</Text>
+                <Text style={styles.instagramButtonLabel}>Promote</Text>
+              </View>
+            </TouchableOpacity>
+          )}
         </Animated.View>
       </Animated.View>
 
@@ -1516,30 +1570,49 @@ const BandPublicProfile: React.FC<BandPublicProfileProps> = ({ route }) => {
           },
         ]}
       >
-        {/* Name header inside panel with swipe down gesture */}
-        <PanGestureHandler onHandlerStateChange={handlePanelGesture}>
-          <LinearGradient
-            colors={["#2a2882", "#ff00ff"]}
-            style={styles.panelHeader}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 0 }}
+        {/* Name header inside panel with clickable collapse arrow */}
+        <LinearGradient
+          colors={["#2a2882", "#ff00ff"]}
+          style={styles.panelHeader}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 0 }}
+        >
+          {/* Clickable band name - collapses when expanded */}
+          <TouchableOpacity
+            onPress={expanded ? handleCollapseArrowPress : undefined}
+            activeOpacity={expanded ? 0.7 : 1}
+            style={styles.nameClickableArea}
           >
-            <View style={styles.panelHeaderContent}>
-              {/* Band name and music icon on the right */}
-              <View style={styles.rightBandInfo}>
-                <Text style={styles.nameTextInside} numberOfLines={1}>
-                  {currentData.name}
-                </Text>
-                <Text style={styles.musicIcon}>🎵</Text>
-              </View>
-              
-              {/* Add subtle visual indicator for swipe down */}
-              {expanded && (
-                <Text style={styles.swipeDownIndicator}>▼</Text>
-              )}
+            <Text style={styles.nameTextInside} numberOfLines={1}>
+              {currentData.name}
+            </Text>
+            <Text style={styles.musicIcon}>🎵</Text>
+          </TouchableOpacity>
+
+          {/* Visual handle indicator */}
+          <View style={styles.panelHandle} />
+
+          {/* Swipe hint when collapsed */}
+          {!expanded && (
+            <View style={styles.swipeHintContainer}>
+              <Text style={styles.swipeHintArrow}>▲</Text>
+              <Text style={styles.swipeHintText}>Swipe up for details</Text>
+              <Text style={styles.swipeHintArrow}>▲</Text>
             </View>
-          </LinearGradient>
-        </PanGestureHandler>
+          )}
+
+          {/* Clickable collapse arrow - vertically centered */}
+          {expanded && (
+            <TouchableOpacity
+              style={styles.collapseArrowButton}
+              onPress={handleCollapseArrowPress}
+              activeOpacity={0.7}
+              hitSlop={{ top: 15, bottom: 15, left: 15, right: 15 }}
+            >
+              <Text style={styles.swipeDownIndicator}>▼</Text>
+            </TouchableOpacity>
+          )}
+        </LinearGradient>
 
         {/* Scrollable tabs */}
         <ScrollView
@@ -1583,35 +1656,62 @@ const BandPublicProfile: React.FC<BandPublicProfileProps> = ({ route }) => {
           
           {/* Action buttons - matching profile.tsx exactly */}
           <View style={styles.actionButtons}>
-            <TouchableOpacity style={styles.actionButton}>
+            <TouchableOpacity
+              style={styles.actionButton}
+              onPress={() => navigation.navigate("BottomTabs" as never, { screen: "Profile", params: { viewAs: "artist" } } as never)}
+            >
               <LinearGradient
                 colors={["#ff00ff", "#2a2882"]}
                 style={styles.actionButtonGradient}
               >
-                <TouchableOpacity onPress={() => navigation.navigate("BottomTabs" as never)}>
-                  <Text style={styles.actionButtonText}>
-                    View Artist Profile
-                  </Text>
-                </TouchableOpacity>
+                <Text style={styles.actionButtonText}>
+                  View Artist Profile
+                </Text>
               </LinearGradient>
             </TouchableOpacity>
-            
-            <TouchableOpacity style={styles.actionButton}>
+
+            <TouchableOpacity
+              style={styles.actionButton}
+              onPress={() => navigation.navigate("BottomTabs" as never, { screen: "Profile", params: { viewAs: "spotter" } } as never)}
+            >
               <LinearGradient
                 colors={["#2a2882", "#ff00ff"]}
                 style={styles.actionButtonGradient}
               >
-                <TouchableOpacity onPress={() => navigation.navigate("BottomTabs" as never)}>
-                  <Text style={styles.actionButtonText}>
-                    View Spotter Profile
-                  </Text>
-                </TouchableOpacity>
+                <Text style={styles.actionButtonText}>
+                  View Spotter Profile
+                </Text>
               </LinearGradient>
             </TouchableOpacity>
             
             <TouchableOpacity style={styles.signOutButton}>
               <Text style={styles.signOutText}>Sign Out</Text>
             </TouchableOpacity>
+          </View>
+          
+          {/* Band Rating Footer */}
+          <View style={styles.panelFooter}>
+            <Text style={styles.ratingTitle}>Band Rating</Text>
+            <View style={styles.starsContainer}>
+              {[1, 2, 3, 4, 5].map((star) => (
+                <Text 
+                  key={star} 
+                  style={[
+                    styles.starIcon,
+                    {
+                      color: star <= Math.round(ratingInfo?.currentRating || 0) 
+                        ? '#FFD700' // Gold for filled stars
+                        : '#E0E0E0'  // Gray for empty stars
+                    }
+                  ]}
+                >
+                  ★
+                </Text>
+              ))}
+            </View>
+            <Text style={styles.ratingDetails}>
+              {ratingInfo ? ratingInfo.currentRating.toFixed(1) : '0.0'} out of 5 • {ratingInfo?.totalRaters || 0} rating{(ratingInfo?.totalRaters || 0) !== 1 ? 's' : ''}
+            </Text>
           </View>
         </ScrollView>
       </Animated.View>
@@ -1879,10 +1979,10 @@ const styles = StyleSheet.create({
     fontStyle: 'italic',
   },
   
-  // Name and Rating Overlay - matching profile.tsx exactly
+  // Name and Rating Overlay - positioned on the image
   nameRatingOverlay: {
     position: "absolute",
-    bottom: 0,
+    bottom: 50, // Lowered by ~150px from previous position
     left: 0,
     right: 0,
     flexDirection: 'row',
@@ -1916,7 +2016,7 @@ const styles = StyleSheet.create({
   },
   ratingButton: {
     position: 'absolute',
-    bottom: 140, // Position above the collapsed tabs panel
+    bottom: COLLAPSED_HEIGHT + 20, // Position above the collapsed panel
     right: 20,
     zIndex: 1000, // High z-index to ensure it's above image touch areas
     elevation: 10, // Android shadow/elevation
@@ -1957,43 +2057,53 @@ const styles = StyleSheet.create({
     textShadowOffset: { width: 1, height: 1 },
     textShadowRadius: 2,
   },
-  // Tip button styles
+  // Tip button styles - Premium floating design
   tipButtonContainer: {
     position: 'absolute',
-    bottom: 140, // Same as rating button
-    left: 20, // Position on the left side
+    bottom: COLLAPSED_HEIGHT + 20, // Position above the collapsed panel
+    left: 20,
     zIndex: 1000,
-    elevation: 10,
+    elevation: 12,
+    shadowColor: '#ff00ff',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.4,
+    shadowRadius: 10,
   },
   tipButtonOverlay: {
-    // Container for touch handling
+    borderRadius: 25,
+    overflow: 'hidden',
   },
   tipButtonBackground: {
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 15,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderRadius: 25,
     alignItems: 'center',
     justifyContent: 'center',
-    minWidth: 40,
-    minHeight: 40,
+    minWidth: 50,
+    minHeight: 50,
+    borderWidth: 2,
+    borderColor: 'rgba(255, 255, 255, 0.3)',
   },
   tipButtonText: {
-    fontSize: 20,
+    fontSize: 22,
     color: '#fff',
     fontWeight: 'bold',
     textAlign: 'center',
+    textShadowColor: 'rgba(0, 0, 0, 0.3)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 3,
   },
   
-  // Sliding panel - matching profile.tsx exactly
+  // Sliding panel - matching artistPublicProfile.tsx
   scrollablePanel: {
     position: "absolute",
-    top: COLLAPSED_HEIGHT,
+    top: COLLAPSED_HEIGHT - 50, // Key: ties panel position to COLLAPSED_HEIGHT
     left: 0,
     right: 0,
-    bottom: FOOTER_HEIGHT - 170,
+    bottom: 0,
     backgroundColor: "#fff",
-    borderTopLeftRadius: 25,
-    borderTopRightRadius: 25,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
     shadowColor: "#000",
     shadowOffset: { width: 0, height: -5 },
     shadowOpacity: 0.2,
@@ -2002,40 +2112,34 @@ const styles = StyleSheet.create({
     zIndex: 10,
   },
   panelHeader: {
-    paddingVertical: 32.5, // Expanded by 35px (was 15, now 32.5 = 17.5px on each side)
+    paddingVertical: Math.max(32.5, DIMS.PANEL_HEADER_HEIGHT * 0.4),
     alignItems: "center",
     flexDirection: "row",
     justifyContent: "center",
-  },
-  panelHeaderContent: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "flex-end", // Push content to the right
-    width: "100%",
-    paddingRight: 10, // 5-10px back from edge
-  },
-  rightBandInfo: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginTop: -10, // Move band name and music icon up 10px
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    position: 'relative',
+    minHeight: DIMS.PANEL_HEADER_HEIGHT,
   },
   nameTextInside: {
     fontSize: 24,
     fontFamily: "Audiowide-Regular",
     color: "#fff",
-    textAlign: "right",
-    marginRight: 8, // Space between name and music icon
+    textAlign: "center",
+    textShadowColor: "rgba(0, 0, 0, 0.75)",
+    textShadowOffset: { width: 1, height: 1 },
+    textShadowRadius: 2,
   },
   musicIcon: {
-    fontSize: 20,
+    fontSize: 18,
     color: "#fff",
+    marginLeft: 8,
   },
   swipeDownIndicator: {
     fontSize: 16,
-    color: "rgba(255, 255, 255, 0.7)",
+    color: "rgba(255, 255, 255, 0.9)",
     fontWeight: "bold",
-    position: "absolute",
-    left: 20, // Move to left side since content is now on right
+    textAlign: 'center',
   },
   
   // Tabs - matching profile.tsx exactly
@@ -2048,37 +2152,52 @@ const styles = StyleSheet.create({
   dropdownTab: {
     height: TAB_HEIGHT,
     borderBottomWidth: 1,
-    borderColor: "#f0f0f0",
+    borderColor: "rgba(0, 0, 0, 0.06)",
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    paddingHorizontal: 20,
+    paddingHorizontal: 24,
     backgroundColor: "#fff",
   },
   dropdownTabExpanded: {
-    backgroundColor: "#f8f8f8",
+    backgroundColor: "rgba(255, 0, 255, 0.04)",
     borderBottomColor: "#ff00ff",
+    borderBottomWidth: 2,
   },
   lastTab: {
     borderBottomWidth: 0,
   },
   dropdownText: {
-    fontSize: 18,
-    fontFamily: "Amiko-Regular",
-    color: "#333",
+    fontSize: 17,
+    fontFamily: "Amiko-SemiBold",
+    color: "#2a2882",
     textTransform: "capitalize",
-    fontWeight: "500",
+    letterSpacing: 0.5,
   },
   arrow: {
-    fontSize: 16,
+    fontSize: 14,
     color: "#ff00ff",
     fontWeight: "bold",
+    width: 28,
+    height: 28,
+    textAlign: 'center',
+    lineHeight: 28,
+    backgroundColor: 'rgba(255, 0, 255, 0.1)',
+    borderRadius: 14,
+    overflow: 'hidden',
   },
   tabContent: {
-    backgroundColor: "#f8f8f8",
-    padding: 20,
+    backgroundColor: "rgba(250, 250, 255, 1)",
+    paddingHorizontal: 24,
+    paddingVertical: 20,
     borderBottomWidth: 1,
-    borderBottomColor: "#f0f0f0",
+    borderColor: "rgba(255, 0, 255, 0.1)",
+    borderLeftWidth: 3,
+    borderLeftColor: "rgba(255, 0, 255, 0.3)",
+    marginLeft: 12,
+    marginRight: 12,
+    marginBottom: 8,
+    borderRadius: 8,
   },
   tabContentText: {
     fontSize: 16,
@@ -2094,23 +2213,25 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   addButton: {
-    backgroundColor: '#ff00ff',
-    paddingVertical: 12,
-    paddingHorizontal: 20,
-    borderRadius: 8,
+    backgroundColor: '#2a2882',
+    paddingVertical: 14,
+    paddingHorizontal: 24,
+    borderRadius: 16,
     alignItems: 'center',
-    marginBottom: 15,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
+    marginBottom: 16,
+    shadowColor: '#2a2882',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 5,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 0, 255, 0.2)',
   },
   addButtonText: {
-    fontSize: 16,
-    fontFamily: 'Amiko-Regular',
+    fontSize: 15,
+    fontFamily: 'Amiko-SemiBold',
     color: '#fff',
-    fontWeight: '600',
+    letterSpacing: 0.5,
   },
   noSongsText: {
     fontSize: 16,
@@ -2124,52 +2245,58 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingVertical: 12,
-    paddingHorizontal: 15,
-    backgroundColor: '#fff',
-    marginBottom: 8,
-    borderRadius: 8,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 2,
-    elevation: 2,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    backgroundColor: 'rgba(255, 255, 255, 0.95)',
+    marginBottom: 10,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 0, 255, 0.1)',
+    shadowColor: '#2a2882',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
+    elevation: 3,
   },
   songInfo: {
     flex: 1,
-    marginRight: 10,
+    marginRight: 12,
   },
   songTitle: {
     fontSize: 16,
-    fontFamily: 'Amiko-Regular',
-    color: '#333',
-    fontWeight: '500',
-    marginBottom: 2,
+    fontFamily: 'Amiko-SemiBold',
+    color: '#2a2882',
+    marginBottom: 4,
+    letterSpacing: 0.3,
   },
   songPriceSection: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    backgroundColor: 'rgba(255, 0, 255, 0.05)',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 12,
   },
   songPrice: {
-    fontSize: 14,
-    fontFamily: 'Amiko-Regular',
+    fontSize: 15,
+    fontFamily: 'Amiko-SemiBold',
     color: '#ff00ff',
-    fontWeight: '600',
+    letterSpacing: 0.3,
   },
   songPurchaseButton: {
     backgroundColor: '#ff00ff',
-    width: 24,
-    height: 24,
-    borderRadius: 12,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
     justifyContent: 'center',
     alignItems: 'center',
-    marginLeft: 10,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.2,
-    shadowRadius: 2,
-    elevation: 2,
+    marginLeft: 12,
+    shadowColor: '#ff00ff',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.4,
+    shadowRadius: 4,
+    elevation: 4,
   },
   songPurchaseButtonText: {
     fontSize: 14,
@@ -2178,15 +2305,21 @@ const styles = StyleSheet.create({
     lineHeight: 14,
   },
   playButton: {
-    backgroundColor: '#ff00ff',
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    backgroundColor: '#2a2882',
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     justifyContent: 'center',
     alignItems: 'center',
+    marginRight: 12,
+    shadowColor: '#2a2882',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.3,
+    shadowRadius: 6,
+    elevation: 4,
   },
   playButtonText: {
-    fontSize: 16,
+    fontSize: 18,
     color: '#fff',
   },
   pendingSongItem: {
@@ -2218,36 +2351,47 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   albumItemContainer: {
-    backgroundColor: '#fff',
-    marginBottom: 12,
-    borderRadius: 12,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
+    backgroundColor: 'rgba(255, 255, 255, 0.98)',
+    marginBottom: 14,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 0, 255, 0.12)',
+    shadowColor: '#2a2882',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.12,
+    shadowRadius: 10,
+    elevation: 5,
     overflow: 'hidden',
   },
   pendingAlbumContainer: {
-    backgroundColor: '#fff3cd',
+    backgroundColor: 'rgba(255, 243, 205, 0.95)',
     borderLeftWidth: 4,
     borderLeftColor: '#ffc107',
+    borderColor: 'rgba(255, 193, 7, 0.3)',
   },
   albumHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    padding: 15,
+    padding: 16,
+    backgroundColor: 'rgba(42, 40, 130, 0.02)',
   },
   albumImage: {
-    width: 60,
-    height: 60,
-    borderRadius: 8,
-    marginRight: 15,
+    width: 70,
+    height: 70,
+    borderRadius: 12,
+    marginRight: 16,
     backgroundColor: '#f0f0f0',
+    borderWidth: 2,
+    borderColor: 'rgba(255, 0, 255, 0.2)',
+    shadowColor: '#ff00ff',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.2,
+    shadowRadius: 6,
+    elevation: 4,
   },
   albumInfo: {
     flex: 1,
-    marginRight: 10,
+    marginRight: 12,
   },
   albumTitleContainer: {
     flexDirection: 'row',
@@ -2256,16 +2400,17 @@ const styles = StyleSheet.create({
   },
   albumTitle: {
     fontSize: 18,
-    fontFamily: 'Amiko-Regular',
-    color: '#333',
-    fontWeight: '600',
-    marginBottom: 4,
+    fontFamily: 'Amiko-SemiBold',
+    color: '#2a2882',
+    marginBottom: 6,
     flex: 1,
+    letterSpacing: 0.3,
   },
   albumDetails: {
-    fontSize: 14,
+    fontSize: 13,
     fontFamily: 'Amiko-Regular',
-    color: '#666',
+    color: '#888',
+    letterSpacing: 0.2,
   },
   albumActions: {
     flexDirection: 'row',
@@ -2380,74 +2525,109 @@ const styles = StyleSheet.create({
     paddingVertical: 20,
   },
   
-  // Band-specific styles
+  // Band-specific styles - Premium member cards
   memberItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: '#f0f0f0',
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    marginBottom: 10,
+    backgroundColor: 'rgba(255, 255, 255, 0.95)',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 0, 255, 0.1)',
+    shadowColor: '#2a2882',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
+    elevation: 3,
   },
   memberImage: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
-    marginRight: 15,
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    marginRight: 14,
+    borderWidth: 2,
+    borderColor: 'rgba(255, 0, 255, 0.3)',
+    shadowColor: '#ff00ff',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    elevation: 2,
   },
   memberInfo: {
     flex: 1,
   },
   memberName: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#333',
+    fontSize: 17,
+    fontFamily: 'Amiko-SemiBold',
+    color: '#2a2882',
+    letterSpacing: 0.3,
   },
   memberStatus: {
-    fontSize: 14,
-    color: '#666',
-    marginTop: 2,
+    fontSize: 13,
+    fontFamily: 'Amiko-Regular',
+    color: '#ff00ff',
+    marginTop: 4,
+    fontStyle: 'italic',
   },
   infoText: {
-    fontSize: 14,
-    color: '#333',
-    marginBottom: 8,
-    lineHeight: 20,
+    fontSize: 15,
+    fontFamily: 'Amiko-Regular',
+    color: '#444',
+    marginBottom: 10,
+    lineHeight: 22,
+    backgroundColor: 'rgba(255, 255, 255, 0.8)',
+    padding: 12,
+    borderRadius: 12,
+    borderLeftWidth: 3,
+    borderLeftColor: '#ff00ff',
   },
   
-  // Action buttons - matching profile.tsx exactly
+  // Action buttons - Premium glassmorphism design
   actionButtons: {
-    padding: 20,
-    gap: 15,
+    padding: 24,
+    gap: 16,
+    backgroundColor: 'rgba(42, 40, 130, 0.03)',
+    marginHorizontal: 12,
+    borderRadius: 20,
+    marginBottom: 20,
   },
   actionButton: {
-    marginBottom: 10,
+    marginBottom: 8,
+    shadowColor: '#ff00ff',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 10,
+    elevation: 5,
   },
   actionButtonGradient: {
-    paddingVertical: 15,
-    paddingHorizontal: 20,
-    borderRadius: 12,
+    paddingVertical: 16,
+    paddingHorizontal: 24,
+    borderRadius: 16,
     alignItems: "center",
   },
   actionButtonText: {
-    fontSize: 18,
-    fontFamily: "Amiko-Regular",
+    fontSize: 17,
+    fontFamily: "Amiko-SemiBold",
     color: "#fff",
-    fontWeight: "600",
+    letterSpacing: 0.5,
   },
   signOutButton: {
-    paddingVertical: 15,
-    paddingHorizontal: 20,
-    borderRadius: 12,
+    paddingVertical: 16,
+    paddingHorizontal: 24,
+    borderRadius: 16,
     borderWidth: 2,
-    borderColor: "#ff00ff",
+    borderColor: "rgba(255, 0, 255, 0.5)",
     alignItems: "center",
-    marginTop: 10,
+    marginTop: 8,
+    backgroundColor: 'rgba(255, 255, 255, 0.5)',
   },
   signOutText: {
-    fontSize: 18,
-    fontFamily: "Amiko-Regular",
+    fontSize: 17,
+    fontFamily: "Amiko-SemiBold",
     color: "#ff00ff",
-    fontWeight: "600",
+    letterSpacing: 0.5,
   },
   
   // Full-screen image modal styles - matching profile.tsx exactly
@@ -2521,98 +2701,122 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingVertical: 12,
-    paddingHorizontal: 15,
-    backgroundColor: '#f8f9fa',
-    marginBottom: 8,
-    borderRadius: 8,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 2,
-    elevation: 2,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    backgroundColor: 'rgba(255, 255, 255, 0.95)',
+    marginBottom: 10,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(42, 40, 130, 0.08)',
+    shadowColor: '#2a2882',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
+    elevation: 3,
   },
   showInfo: {
     flex: 1,
-    marginRight: 10,
+    marginRight: 12,
   },
   showTitle: {
-    fontSize: 16,
-    fontFamily: 'Amiko-Regular',
-    color: '#333',
-    fontWeight: '600',
-    marginBottom: 4,
+    fontSize: 17,
+    fontFamily: 'Amiko-SemiBold',
+    color: '#2a2882',
+    marginBottom: 6,
+    letterSpacing: 0.3,
   },
   showDate: {
-    fontSize: 14,
+    fontSize: 13,
     fontFamily: 'Amiko-Regular',
-    color: '#666',
-    marginBottom: 2,
+    color: '#888',
+    marginBottom: 4,
+    letterSpacing: 0.2,
   },
   showStatus: {
     fontSize: 12,
-    fontFamily: 'Amiko-Regular',
-    color: '#2a2882',
-    fontWeight: '600',
+    fontFamily: 'Amiko-SemiBold',
+    color: '#ff00ff',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
   },
   showArrow: {
-    fontSize: 18,
-    color: '#2a2882',
+    fontSize: 20,
+    color: '#ff00ff',
     fontWeight: 'bold',
+    backgroundColor: 'rgba(255, 0, 255, 0.1)',
+    width: 32,
+    height: 32,
+    textAlign: 'center',
+    lineHeight: 32,
+    borderRadius: 16,
+    overflow: 'hidden',
   },
   noShowsText: {
-    fontSize: 16,
+    fontSize: 15,
     fontFamily: 'Amiko-Regular',
-    color: '#666',
+    color: '#888',
     textAlign: 'center',
     fontStyle: 'italic',
-    paddingVertical: 20,
+    paddingVertical: 24,
+    backgroundColor: 'rgba(255, 255, 255, 0.5)',
+    borderRadius: 12,
+    marginVertical: 8,
   },
   
-  // Vote section styles
+  // Vote section styles - Premium design
   voteSection: {
-    marginLeft: 10,
+    marginLeft: 12,
     justifyContent: 'center',
+    alignItems: 'center',
   },
   voteButton: {
     backgroundColor: '#ff00ff',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 15,
-    minWidth: 70,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 20,
+    minWidth: 75,
+    shadowColor: '#ff00ff',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+    elevation: 3,
   },
   voteButtonText: {
-    fontSize: 11,
-    fontWeight: '600',
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#fff',
+    textAlign: 'center',
   },
   voteCountText: {
-    fontSize: 10,
-    color: '#666',
+    fontSize: 11,
+    color: '#888',
+    marginTop: 4,
+    fontFamily: 'Amiko-Regular',
   },
-  
-  // Follow button styles
+
+  // Follow button styles - Premium floating design
   followButton: {
     position: 'absolute',
     top: 40,
     right: 45,
-    borderRadius: 25,
+    borderRadius: 28,
     overflow: 'hidden',
-    elevation: 5,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 3.84,
+    elevation: 8,
+    shadowColor: '#ff00ff',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.4,
+    shadowRadius: 8,
     zIndex: 100,
   },
   followButtonGradient: {
-    paddingVertical: 10,
-    paddingHorizontal: 15,
+    paddingVertical: 12,
+    paddingHorizontal: 18,
     alignItems: 'center',
     justifyContent: 'center',
   },
   followIcon: {
-    width: 24,
-    height: 24,
+    width: 26,
+    height: 26,
     tintColor: '#fff',
     marginBottom: 4,
   },
@@ -2620,16 +2824,16 @@ const styles = StyleSheet.create({
     tintColor: '#fff',
   },
   followCount: {
-    fontSize: 14,
-    fontFamily: 'Amiko-Regular',
+    fontSize: 15,
+    fontFamily: 'Amiko-SemiBold',
     color: '#fff',
-    fontWeight: '600',
+    letterSpacing: 0.3,
   },
   
-  // Instagram-style action buttons
+  // Instagram-style action buttons - lowered 70px to avoid follow button
   modernActionContainer: {
     position: 'absolute',
-    bottom: 140,
+    bottom: COLLAPSED_HEIGHT - 50,
     right: 20,
     alignItems: 'center',
     zIndex: 1000,
@@ -2780,6 +2984,106 @@ const styles = StyleSheet.create({
     color: '#666',
     textAlign: 'center',
     fontStyle: 'italic',
+  },
+  
+  // Swipe hint positioned at bottom of panel header
+  swipeHintContainer: {
+    position: 'absolute',
+    bottom: 8,
+    left: 0,
+    right: 0,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 6,
+  },
+  swipeHintText: {
+    fontSize: 11,
+    color: 'rgba(255, 255, 255, 0.7)',
+    fontFamily: 'Amiko-Regular',
+    letterSpacing: 0.5,
+  },
+  swipeHintArrow: {
+    fontSize: 10,
+    color: 'rgba(255, 255, 255, 0.7)',
+  },
+  nameClickableArea: {
+    flex: 1,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingVertical: 8,
+  },
+  panelHandle: {
+    position: 'absolute',
+    top: 12,
+    width: 40,
+    height: 4,
+    backgroundColor: 'rgba(255, 255, 255, 0.3)',
+    borderRadius: 2,
+    alignSelf: 'center',
+  },
+  collapseArrowButton: {
+    position: "absolute",
+    left: 20,
+    top: 0,
+    bottom: 0,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 10,
+  },
+  
+  // Band Rating Footer styles - Premium design
+  panelFooter: {
+    paddingVertical: 28,
+    paddingHorizontal: 24,
+    alignItems: 'center',
+    backgroundColor: 'rgba(42, 40, 130, 0.08)',
+    marginTop: 20,
+    marginHorizontal: 12,
+    marginBottom: 20,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 0, 255, 0.15)',
+    shadowColor: '#ff00ff',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 12,
+    elevation: 4,
+  },
+  ratingTitle: {
+    fontSize: 16,
+    fontFamily: 'Amiko-SemiBold',
+    color: '#2a2882',
+    marginBottom: 14,
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
+  },
+  starsContainer: {
+    flexDirection: 'row',
+    marginBottom: 12,
+    padding: 8,
+    backgroundColor: 'rgba(255, 255, 255, 0.8)',
+    borderRadius: 16,
+    shadowColor: '#ff00ff',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 8,
+    elevation: 3,
+  },
+  starIcon: {
+    fontSize: 28,
+    marginHorizontal: 3,
+    textShadowColor: 'rgba(255, 0, 255, 0.4)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 4,
+  },
+  ratingDetails: {
+    fontSize: 13,
+    fontFamily: 'Amiko-Regular',
+    color: '#666',
+    textAlign: 'center',
+    marginTop: 4,
   },
 });
 

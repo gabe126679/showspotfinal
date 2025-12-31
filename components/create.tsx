@@ -12,12 +12,30 @@ import {
   KeyboardAvoidingView,
   Platform,
   Dimensions,
+  Modal,
 } from 'react-native';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
+
+// Route params type for pre-selected artist/band promotion
+type CreateRouteParams = {
+  Create: {
+    preSelectedArtist?: {
+      artist_id: string;
+      artist_name: string;
+    };
+    preSelectedBand?: {
+      band_id: string;
+      band_name: string;
+    };
+  };
+};
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { LinearGradient } from 'expo-linear-gradient';
+import DateTimePicker from '@react-native-community/datetimepicker';
 import { supabase } from '../lib/supabase';
 import { notificationService } from '../services/notificationService';
-// import DatePicker from 'react-native-date-picker';
+import { ToastManager } from './Toast';
+import { colors, fonts, spacing, borderRadius } from '../lib/theme';
 
 const { width } = Dimensions.get('window');
 
@@ -63,7 +81,12 @@ interface CombinedArtistBand {
 
 const Create = () => {
   const navigation = useNavigation();
-  
+  const route = useRoute<RouteProp<CreateRouteParams, 'Create'>>();
+
+  // Get pre-selected artist/band from navigation params (for "Promote this artist" feature)
+  const preSelectedArtist = route.params?.preSelectedArtist;
+  const preSelectedBand = route.params?.preSelectedBand;
+
   // App flow states - determines which screen to show
   const [currentFlow, setCurrentFlow] = useState<'selection' | 'band_wizard' | 'show_wizard'>('selection');
   
@@ -92,16 +115,67 @@ const Create = () => {
   const [searchingVenues, setSearchingVenues] = useState(false);
   const [searchingPerformers, setSearchingPerformers] = useState(false);
   const [showLoading, setShowLoading] = useState(false);
-  
+
+  // Date/Time picker states
+  const [selectedDate, setSelectedDate] = useState<Date>(new Date());
+  const [selectedTime, setSelectedTime] = useState<Date>(new Date());
+  const [showDatePicker, setShowDatePicker] = useState(false);
+  const [showTimePicker, setShowTimePicker] = useState(false);
+
   // Wizard step management
   const [currentStep, setCurrentStep] = useState(1);
-  
+  const [bandStep, setBandStep] = useState(1);
+
   const totalSteps = 5;
+  const totalBandSteps = 3;
 
   // Check if current user is an artist
   useEffect(() => {
     checkIfArtist();
   }, []);
+
+  // Handle pre-selected artist/band from "Promote this artist/band" navigation
+  useEffect(() => {
+    if (preSelectedArtist) {
+      // Prevent duplicate additions
+      const alreadyAdded = showMembers.some(m => m.show_member_id === preSelectedArtist.artist_id);
+      if (alreadyAdded) return;
+
+      // Start show wizard with pre-selected performer
+      setCurrentFlow('show_wizard');
+      setCurrentStep(1); // Start at venue selection
+
+      const newMember: ShowMember = {
+        show_member_id: preSelectedArtist.artist_id,
+        show_member_type: 'artist',
+        show_member_name: preSelectedArtist.artist_name,
+        show_member_position: 'headliner',
+        show_member_decision: false,
+        show_member_consensus: null
+      };
+      setShowMembers([newMember]);
+      ToastManager.success(`Promoting ${preSelectedArtist.artist_name}! Now select a venue.`);
+    } else if (preSelectedBand) {
+      // Prevent duplicate additions
+      const alreadyAdded = showMembers.some(m => m.show_member_id === preSelectedBand.band_id);
+      if (alreadyAdded) return;
+
+      // Start show wizard with pre-selected performer
+      setCurrentFlow('show_wizard');
+      setCurrentStep(1); // Start at venue selection
+
+      const newMember: ShowMember = {
+        show_member_id: preSelectedBand.band_id,
+        show_member_type: 'band',
+        show_member_name: preSelectedBand.band_name,
+        show_member_position: 'headliner',
+        show_member_decision: false,
+        show_member_consensus: null
+      };
+      setShowMembers([newMember]);
+      ToastManager.success(`Promoting ${preSelectedBand.band_name}! Now select a venue.`);
+    }
+  }, [preSelectedArtist?.artist_id, preSelectedBand?.band_id]);
 
   const checkIfArtist = async () => {
     try {
@@ -186,7 +260,7 @@ const Create = () => {
         setSearchResults(filteredResults);
       } catch (error) {
         console.error('🔍 Error searching artists:', error);
-        Alert.alert('Search Error', 'Could not search for artists. Please try again.');
+        ToastManager.error('Could not search for artists. Please try again.');
       } finally {
         setSearching(false);
       }
@@ -221,7 +295,7 @@ const Create = () => {
         setVenueResults(data || []);
       } catch (error) {
         console.error('🔍 Error searching venues:', error);
-        Alert.alert('Search Error', 'Could not search for venues. Please try again.');
+        ToastManager.error('Could not search for venues. Please try again.');
       } finally {
         setSearchingVenues(false);
       }
@@ -283,7 +357,7 @@ const Create = () => {
         setPerformerResults(filteredResults);
       } catch (error) {
         console.error('🔍 Error searching performers:', error);
-        Alert.alert('Search Error', 'Could not search for performers. Please try again.');
+        ToastManager.error('Could not search for performers. Please try again.');
       } finally {
         setSearchingPerformers(false);
       }
@@ -307,7 +381,7 @@ const Create = () => {
   const removeMember = (artistId: string) => {
     // Don't allow removing the creator (first member)
     if (selectedMembers[0]?.artist_id === artistId) {
-      Alert.alert('Cannot Remove', 'You cannot remove the band creator');
+      ToastManager.info('You cannot remove the band creator');
       return;
     }
     setSelectedMembers(selectedMembers.filter(member => member.artist_id !== artistId));
@@ -376,13 +450,100 @@ const Create = () => {
     }
   };
 
+  // Band wizard step navigation
+  const nextBandStep = () => {
+    if (bandStep < totalBandSteps) {
+      setBandStep(bandStep + 1);
+    }
+  };
+
+  const prevBandStep = () => {
+    if (bandStep > 1) {
+      setBandStep(bandStep - 1);
+    }
+  };
+
+  const canProceedFromBandStep = (step: number): boolean => {
+    switch (step) {
+      case 1: return bandName.trim().length >= 2;
+      case 2: return selectedMembers.length >= 2;
+      default: return false;
+    }
+  };
+
+  const resetBandWizard = () => {
+    setBandStep(1);
+    setBandName('');
+    setSelectedMembers(currentArtist ? [{
+      artist_id: currentArtist.artist_id,
+      artist_name: currentArtist.artist_name
+    }] : []);
+    setSearchQuery('');
+    setSearchResults([]);
+  };
+
+  const resetShowWizard = () => {
+    setCurrentStep(1);
+    setShowVenue(null);
+    setShowMembers([]);
+    setShowDate('');
+    setShowTime('');
+    setVenueSearch('');
+    setPerformerSearch('');
+    setSelectedDate(new Date());
+    setSelectedTime(new Date());
+  };
+
+  // Date/Time picker handlers
+  const handleDateChange = (event: any, date?: Date) => {
+    if (Platform.OS === 'android') {
+      setShowDatePicker(false);
+    }
+    if (date) {
+      setSelectedDate(date);
+      // Format as YYYY-MM-DD
+      const formattedDate = date.toISOString().split('T')[0];
+      setShowDate(formattedDate);
+    }
+  };
+
+  const handleTimeChange = (event: any, time?: Date) => {
+    if (Platform.OS === 'android') {
+      setShowTimePicker(false);
+    }
+    if (time) {
+      setSelectedTime(time);
+      // Format as HH:MM
+      const hours = time.getHours().toString().padStart(2, '0');
+      const minutes = time.getMinutes().toString().padStart(2, '0');
+      setShowTime(`${hours}:${minutes}`);
+    }
+  };
+
+  const formatDisplayDate = (date: Date) => {
+    return date.toLocaleDateString('en-US', {
+      weekday: 'long',
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric'
+    });
+  };
+
+  const formatDisplayTime = (time: Date) => {
+    return time.toLocaleTimeString('en-US', {
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true
+    });
+  };
+
   const handleCreateShow = async () => {
     setShowLoading(true);
     try {
       const { data: sessionData } = await supabase.auth.getSession();
       const user = sessionData?.session?.user;
       if (!user) {
-        Alert.alert('Error', 'You must be logged in to create a show');
+        ToastManager.error('You must be logged in to create a show');
         return;
       }
 
@@ -491,32 +652,43 @@ const Create = () => {
         // Don't fail the whole operation if notifications fail
       }
 
-      Alert.alert(
-        'Show Created! 🎉',
-        `Your show has been created and invitations have been sent to all performers and the venue.`,
-        [
-          {
-            text: 'Create Another',
-            style: 'default',
-            onPress: () => {
-              // Reset form
-              setCurrentStep(1);
-              setShowVenue(null);
-              setShowMembers([]);
-              setShowDate('');
-              setShowTime('');
+      ToastManager.success('Show created! Invitations sent to all performers and venue.');
+
+      // Show options dialog after brief delay
+      setTimeout(() => {
+        Alert.alert(
+          'Show Created!',
+          'What would you like to do next?',
+          [
+            {
+              text: 'Create Another',
+              onPress: () => {
+                resetShowWizard();
+              }
+            },
+            {
+              text: 'View Show',
+              onPress: () => {
+                resetShowWizard();
+                setCurrentFlow('selection');
+                navigation.navigate('ShowBill' as never, { show_id: data.show_id } as never);
+              }
+            },
+            {
+              text: 'Done',
+              style: 'cancel',
+              onPress: () => {
+                resetShowWizard();
+                setCurrentFlow('selection');
+              }
             }
-          },
-          {
-            text: 'Done',
-            style: 'cancel'
-          }
-        ]
-      );
+          ]
+        );
+      }, 500);
 
     } catch (error) {
       console.error('Error creating show:', error);
-      Alert.alert('Error', 'Could not create show. Please try again.');
+      ToastManager.error('Could not create show. Please try again.');
     } finally {
       setShowLoading(false);
     }
@@ -524,17 +696,17 @@ const Create = () => {
 
   const handleCreateBand = async () => {
     if (!bandName.trim()) {
-      Alert.alert('Missing Info', 'Please enter a band name');
+      ToastManager.warning('Please enter a band name');
       return;
     }
 
     if (selectedMembers.length < 2) {
-      Alert.alert('Missing Members', 'A band must have at least 2 members');
+      ToastManager.warning('A band must have at least 2 members');
       return;
     }
 
     if (!currentArtist) {
-      Alert.alert('Error', 'Could not find current artist information');
+      ToastManager.error('Could not find current artist information');
       return;
     }
 
@@ -547,14 +719,6 @@ const Create = () => {
       }));
 
       const memberIds = selectedMembers.map(m => m.artist_id);
-      
-      console.log('🎵 Creating band with data:', {
-        band_creator: currentArtist.artist_id,
-        band_members: memberIds,
-        band_name: bandName.trim(),
-        band_consensus: consensus,
-        band_status: 'pending'
-      });
 
       const insertData = {
         band_creator: String(currentArtist.artist_id),
@@ -565,22 +729,19 @@ const Create = () => {
         band_members: memberIds,
         band_consensus: consensus
       };
-      
+
       const { data, error } = await supabase
         .from('bands')
         .insert(insertData)
         .select()
         .single();
-        
+
       if (error) {
-        console.error('❌ Insert failed:', error);
+        console.error('Insert failed:', error);
         throw error;
       }
-        
-      console.log('✅ Band created successfully:', data);
-      
+
       // Send band invitations to all members
-      console.log('📧 Sending band invitations...');
       const invitationResult = await notificationService.sendBandInvitations(
         currentArtist.artist_id,
         currentArtist.artist_name,
@@ -588,31 +749,50 @@ const Create = () => {
         bandName.trim(),
         selectedMembers
       );
-      
-      if (invitationResult.success) {
-        console.log('✅ All invitations sent successfully');
-      } else {
-        console.warn('⚠️ Some invitations failed to send:', invitationResult.error);
+
+      if (!invitationResult.success) {
+        console.warn('Some invitations failed to send:', invitationResult.error);
       }
-      
-      Alert.alert(
-        'Band Created!', 
-        `${bandName} has been created. Other members will be notified to accept their invitation.`,
-        [
-          {
-            text: 'Add Pictures',
-            onPress: () => navigation.navigate('BandPicture', { band_id: data.band_id })
-          },
-          {
-            text: 'View Profile',
-            onPress: () => navigation.navigate('BandPublicProfile', { band_id: data.band_id })
-          }
-        ]
-      );
+
+      ToastManager.success(`${bandName} has been created! Invitations sent to all members.`);
+
+      // Navigate to band profile after a brief delay
+      setTimeout(() => {
+        Alert.alert(
+          'Band Created!',
+          'What would you like to do next?',
+          [
+            {
+              text: 'Add Pictures',
+              onPress: () => {
+                resetBandWizard();
+                setCurrentFlow('selection');
+                navigation.navigate('BandPicture' as never, { band_id: data.band_id } as never);
+              }
+            },
+            {
+              text: 'View Profile',
+              onPress: () => {
+                resetBandWizard();
+                setCurrentFlow('selection');
+                navigation.navigate('BandPublicProfile' as never, { band_id: data.band_id } as never);
+              }
+            },
+            {
+              text: 'Done',
+              style: 'cancel',
+              onPress: () => {
+                resetBandWizard();
+                setCurrentFlow('selection');
+              }
+            }
+          ]
+        );
+      }, 500);
 
     } catch (error) {
       console.error('Error creating band:', error);
-      Alert.alert('Error', 'Could not create band. Please try again.');
+      ToastManager.error('Could not create band. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -666,168 +846,317 @@ const Create = () => {
     );
   };
 
-  // Render full-screen band wizard
-  const renderBandWizard = () => (
-    <ScrollView style={styles.wizardScrollContainer} showsVerticalScrollIndicator={false}>
-      <View style={styles.wizardContainer}>
-        <View style={styles.wizardHeader}>
-          <TouchableOpacity 
-            style={styles.backButton}
-            onPress={() => setCurrentFlow('selection')}
-          >
-            <Text style={styles.backButtonText}>← Back</Text>
-          </TouchableOpacity>
-        </View>
-        
-        <Text style={styles.wizardTitle}>Form a Band</Text>
-        <Text style={styles.wizardSubtitle}>Create your musical collective</Text>
-        
-        {/* Band Name Step */}
-        <View style={styles.wizardStepContainer}>
-          <Text style={styles.wizardStepTitle}>🎸 Band Details</Text>
-          <View style={styles.inputContainer}>
-            <Text style={styles.inputLabel}>Band Name</Text>
-            <TextInput
-              style={styles.wizardInput}
-              placeholder="Enter your band name"
-              placeholderTextColor="#999"
-              value={bandName}
-              onChangeText={setBandName}
-            />
-          </View>
-        </View>
+  // Band Wizard Step 1: Band Details
+  const renderBandDetailsStep = () => (
+    <View style={styles.bandStepContent}>
+      <View style={styles.bandInputGroup}>
+        <Text style={styles.bandInputLabel}>Band Name</Text>
+        <TextInput
+          style={styles.bandTextInput}
+          placeholder="Enter your band name..."
+          placeholderTextColor="rgba(255,255,255,0.5)"
+          value={bandName}
+          onChangeText={setBandName}
+          autoFocus
+        />
+        {bandName.trim().length > 0 && bandName.trim().length < 2 && (
+          <Text style={styles.bandInputHint}>Name must be at least 2 characters</Text>
+        )}
+      </View>
 
-        {/* Members Step */}
-        <View style={styles.wizardStepContainer}>
-          <Text style={styles.wizardStepTitle}>🎤 Band Members ({selectedMembers.length})</Text>
-          
-          {/* Current Members */}
-          {selectedMembers.length > 0 && (
-            <View style={styles.currentMembersContainer}>
-              <Text style={styles.membersListTitle}>Current Members</Text>
-              {selectedMembers.map((member, index) => (
-                <View key={member.artist_id} style={styles.memberCard}>
-                  <View style={styles.memberCardInfo}>
-                    <View style={styles.memberBadge}>
-                      <Text style={styles.memberBadgeText}>
-                        {index === 0 ? '👑' : '🎵'}
-                      </Text>
-                    </View>
-                    <View style={styles.memberDetails}>
-                      <Text style={styles.memberCardName}>{member.artist_name}</Text>
-                      <Text style={styles.memberCardRole}>
-                        {index === 0 ? 'Band Creator' : 'Member'}
-                      </Text>
-                    </View>
-                  </View>
-                  {index !== 0 && (
-                    <TouchableOpacity 
-                      style={styles.removeMemberButton}
-                      onPress={() => removeMember(member.artist_id)}
-                    >
-                      <Text style={styles.removeMemberButtonText}>✕</Text>
-                    </TouchableOpacity>
-                  )}
+      <View style={styles.bandTipBox}>
+        <Text style={styles.bandTipTitle}>Tips for a great band name:</Text>
+        <Text style={styles.bandTipText}>• Make it memorable and unique</Text>
+        <Text style={styles.bandTipText}>• Consider your genre and style</Text>
+        <Text style={styles.bandTipText}>• Check if the name is available online</Text>
+      </View>
+    </View>
+  );
+
+  // Band Wizard Step 2: Add Members
+  const renderBandMembersStep = () => (
+    <View style={styles.bandStepContent}>
+      {/* Current Members List */}
+      <View style={styles.bandMembersList}>
+        <Text style={styles.bandMembersHeader}>
+          Band Members ({selectedMembers.length})
+        </Text>
+        {selectedMembers.map((member, index) => (
+          <View key={member.artist_id} style={styles.bandMemberCard}>
+            <View style={styles.bandMemberInfo}>
+              <View style={[
+                styles.bandMemberBadge,
+                index === 0 && styles.bandMemberBadgeCreator
+              ]}>
+                <Text style={styles.bandMemberBadgeText}>
+                  {index === 0 ? '👑' : '🎵'}
+                </Text>
+              </View>
+              <View style={styles.bandMemberDetails}>
+                <Text style={styles.bandMemberName}>{member.artist_name}</Text>
+                <Text style={styles.bandMemberRole}>
+                  {index === 0 ? 'Band Creator (You)' : 'Invited Member'}
+                </Text>
+              </View>
+            </View>
+            {index !== 0 && (
+              <TouchableOpacity
+                style={styles.bandMemberRemove}
+                onPress={() => removeMember(member.artist_id)}
+              >
+                <Text style={styles.bandMemberRemoveText}>×</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        ))}
+      </View>
+
+      {/* Search Section */}
+      <View style={styles.bandSearchSection}>
+        <Text style={styles.bandSearchTitle}>Invite Artists</Text>
+        <TextInput
+          style={styles.bandTextInput}
+          placeholder="Search for artists to invite..."
+          placeholderTextColor="rgba(255,255,255,0.5)"
+          value={searchQuery}
+          onChangeText={setSearchQuery}
+        />
+
+        {searching && (
+          <View style={styles.bandSearchLoading}>
+            <ActivityIndicator size="small" color={colors.primary.magenta} />
+            <Text style={styles.bandSearchLoadingText}>Searching...</Text>
+          </View>
+        )}
+
+        {searchQuery.length >= 2 && !searching && searchResults.length === 0 && (
+          <View style={styles.bandSearchEmpty}>
+            <Text style={styles.bandSearchEmptyText}>
+              No artists found for "{searchQuery}"
+            </Text>
+          </View>
+        )}
+
+        {searchResults.length > 0 && (
+          <View style={styles.bandSearchResults}>
+            {searchResults.slice(0, 5).map((artist) => (
+              <TouchableOpacity
+                key={artist.artist_id}
+                style={styles.bandSearchResultCard}
+                onPress={() => addMember(artist)}
+              >
+                <View style={styles.bandSearchResultInfo}>
+                  <Text style={styles.bandSearchResultName}>{artist.artist_name}</Text>
+                  <Text style={styles.bandSearchResultType}>Artist</Text>
+                </View>
+                <View style={styles.bandSearchResultAdd}>
+                  <Text style={styles.bandSearchResultAddText}>+ Add</Text>
+                </View>
+              </TouchableOpacity>
+            ))}
+          </View>
+        )}
+      </View>
+
+      {selectedMembers.length < 2 && (
+        <View style={styles.bandMinMembersHint}>
+          <Text style={styles.bandMinMembersText}>
+            Add at least {2 - selectedMembers.length} more member{selectedMembers.length === 1 ? '' : 's'} to continue
+          </Text>
+        </View>
+      )}
+    </View>
+  );
+
+  // Band Wizard Step 3: Review & Create
+  const renderBandReviewStep = () => (
+    <View style={styles.bandStepContent}>
+      <View style={styles.bandReviewCard}>
+        <Text style={styles.bandReviewLabel}>Band Name</Text>
+        <Text style={styles.bandReviewValue}>{bandName}</Text>
+      </View>
+
+      <View style={styles.bandReviewCard}>
+        <Text style={styles.bandReviewLabel}>Members ({selectedMembers.length})</Text>
+        {selectedMembers.map((member, index) => (
+          <View key={member.artist_id} style={styles.bandReviewMember}>
+            <Text style={styles.bandReviewMemberIcon}>
+              {index === 0 ? '👑' : '🎵'}
+            </Text>
+            <Text style={styles.bandReviewMemberName}>{member.artist_name}</Text>
+            <Text style={styles.bandReviewMemberRole}>
+              {index === 0 ? 'Creator' : 'Member'}
+            </Text>
+          </View>
+        ))}
+      </View>
+
+      <View style={styles.bandReviewInfo}>
+        <Text style={styles.bandReviewInfoTitle}>What happens next?</Text>
+        <Text style={styles.bandReviewInfoText}>
+          • Your band will be created with a "pending" status
+        </Text>
+        <Text style={styles.bandReviewInfoText}>
+          • Invitations will be sent to all members
+        </Text>
+        <Text style={styles.bandReviewInfoText}>
+          • Once all members accept, the band becomes active
+        </Text>
+        <Text style={styles.bandReviewInfoText}>
+          • You can add band photos and music after creation
+        </Text>
+      </View>
+
+      <TouchableOpacity
+        style={[
+          styles.bandCreateButton,
+          loading && styles.bandCreateButtonDisabled
+        ]}
+        onPress={handleCreateBand}
+        disabled={loading}
+      >
+        {loading ? (
+          <ActivityIndicator color="#fff" size="small" />
+        ) : (
+          <>
+            <Text style={styles.bandCreateButtonText}>Create Band</Text>
+            <Text style={styles.bandCreateButtonSubtext}>
+              {selectedMembers.length} members • Invitations will be sent
+            </Text>
+          </>
+        )}
+      </TouchableOpacity>
+    </View>
+  );
+
+  // Render full-screen band wizard
+  const renderBandWizard = () => {
+    const stepTitles = ['Band Details', 'Add Members', 'Review & Create'];
+    const stepIcons = ['🎸', '🎤', '✨'];
+
+    return (
+      <LinearGradient
+        colors={[colors.primary.deepPurple, colors.primary.purple, colors.primary.magenta]}
+        style={styles.bandWizardGradient}
+      >
+        <ScrollView
+          style={styles.bandWizardScroll}
+          contentContainerStyle={styles.bandWizardScrollContent}
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+        >
+          {/* Header */}
+          <View style={styles.bandWizardHeader}>
+            <TouchableOpacity
+              style={styles.bandWizardBackBtn}
+              onPress={() => {
+                if (bandStep > 1) {
+                  prevBandStep();
+                } else {
+                  resetBandWizard();
+                  setCurrentFlow('selection');
+                }
+              }}
+            >
+              <Text style={styles.bandWizardBackText}>
+                {bandStep > 1 ? '← Previous' : '← Back'}
+              </Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* Title Section */}
+          <View style={styles.bandWizardTitleSection}>
+            <Text style={styles.bandWizardEmoji}>{stepIcons[bandStep - 1]}</Text>
+            <Text style={styles.bandWizardTitle}>Form a Band</Text>
+            <Text style={styles.bandWizardSubtitle}>
+              Step {bandStep} of {totalBandSteps}: {stepTitles[bandStep - 1]}
+            </Text>
+          </View>
+
+          {/* Progress Bar */}
+          <View style={styles.bandProgressContainer}>
+            <View style={styles.bandProgressBar}>
+              <View
+                style={[
+                  styles.bandProgressFill,
+                  { width: `${(bandStep / totalBandSteps) * 100}%` }
+                ]}
+              />
+            </View>
+            <View style={styles.bandProgressSteps}>
+              {stepTitles.map((title, index) => (
+                <View
+                  key={index}
+                  style={[
+                    styles.bandProgressDot,
+                    index < bandStep && styles.bandProgressDotActive,
+                    index === bandStep - 1 && styles.bandProgressDotCurrent
+                  ]}
+                >
+                  <Text style={[
+                    styles.bandProgressDotText,
+                    index < bandStep && styles.bandProgressDotTextActive
+                  ]}>
+                    {index + 1}
+                  </Text>
                 </View>
               ))}
             </View>
-          )}
-
-          {/* Add Member Search */}
-          <View style={styles.searchSection}>
-            <Text style={styles.searchSectionTitle}>Add New Member</Text>
-            <TextInput
-              style={styles.wizardInput}
-              placeholder="Search for artists to invite..."
-              placeholderTextColor="#999"
-              value={searchQuery}
-              onChangeText={setSearchQuery}
-            />
-          
-            {searching && (
-              <View style={styles.searchingIndicator}>
-                <ActivityIndicator size="small" color="#2a2882" />
-                <Text style={styles.searchingText}>Searching artists...</Text>
-              </View>
-            )}
-            
-            {searchQuery.length >= 2 && !searching && searchResults.length === 0 && (
-              <View style={styles.noResultsContainer}>
-                <Text style={styles.noResultsText}>No artists found for "{searchQuery}"</Text>
-                <Text style={styles.noResultsSubtext}>Try a different search term</Text>
-              </View>
-            )}
-            
-            {searchResults.length > 0 && (
-              <View style={styles.searchResultsContainer}>
-                <Text style={styles.searchResultsTitle}>Available Artists</Text>
-                {searchResults.map((item) => (
-                  <TouchableOpacity
-                    key={item.artist_id}
-                    style={styles.searchResultCard}
-                    onPress={() => addMember(item)}
-                  >
-                    <View style={styles.searchResultInfo}>
-                      <Text style={styles.searchResultName}>{item.artist_name}</Text>
-                      <Text style={styles.searchResultLabel}>Artist</Text>
-                    </View>
-                    <View style={styles.addMemberButton}>
-                      <Text style={styles.addMemberButtonText}>Add</Text>
-                    </View>
-                  </TouchableOpacity>
-                ))}
-              </View>
-            )}
           </View>
-        </View>
 
-        {/* Create Band Action */}
-        <View style={styles.wizardStepContainer}>
-          <View style={styles.createBandSection}>
-            <Text style={styles.createBandInfo}>
-              Ready to form your band? You'll need at least 2 members including yourself.
-            </Text>
-            <TouchableOpacity
-              style={[
-                styles.wizardActionButton, 
-                (!bandName.trim() || selectedMembers.length < 2) && styles.wizardActionButtonDisabled,
-                loading && styles.wizardActionButtonDisabled
-              ]}
-              onPress={handleCreateBand}
-              disabled={!bandName.trim() || selectedMembers.length < 2 || loading}
-            >
-              {loading ? (
-                <ActivityIndicator color="#fff" size="small" />
-              ) : (
-                <Text style={styles.wizardActionButtonText}>
-                  Create Band ({selectedMembers.length} members)
+          {/* Step Content */}
+          <View style={styles.bandStepContainer}>
+            {bandStep === 1 && renderBandDetailsStep()}
+            {bandStep === 2 && renderBandMembersStep()}
+            {bandStep === 3 && renderBandReviewStep()}
+          </View>
+
+          {/* Navigation Footer */}
+          {bandStep < 3 && (
+            <View style={styles.bandNavFooter}>
+              <TouchableOpacity
+                style={[
+                  styles.bandNavButton,
+                  styles.bandNavButtonPrimary,
+                  !canProceedFromBandStep(bandStep) && styles.bandNavButtonDisabled
+                ]}
+                onPress={nextBandStep}
+                disabled={!canProceedFromBandStep(bandStep)}
+              >
+                <Text style={styles.bandNavButtonText}>
+                  {bandStep === 2 ? 'Review Band' : 'Continue'}
                 </Text>
-              )}
-            </TouchableOpacity>
-          </View>
-        </View>
-      </View>
-    </ScrollView>
-  );
+              </TouchableOpacity>
+            </View>
+          )}
+        </ScrollView>
+      </LinearGradient>
+    );
+  };
 
   // Render full-screen show wizard
   const renderShowWizard = () => {
-    const stepTitles = [
-      '📍 Select Venue',
-      '🎵 Build Lineup', 
-      '📅 Set Date & Time',
-      '👀 Review Details',
-      '🎉 Create Show'
-    ];
+    const stepTitles = ['Select Venue', 'Build Lineup', 'Set Date & Time', 'Review Details', 'Create Show'];
+    const stepIcons = ['📍', '🎵', '📅', '👀', '🎉'];
 
     return (
-      <ScrollView style={styles.wizardScrollContainer} showsVerticalScrollIndicator={false}>
-        <View style={styles.wizardContainer}>
-          <View style={styles.wizardHeader}>
-            <TouchableOpacity 
-              style={styles.backButton}
+      <LinearGradient
+        colors={[colors.primary.deepPurple, colors.primary.purple, colors.primary.magenta]}
+        style={styles.showWizardGradient}
+      >
+        <ScrollView
+          style={styles.showWizardScroll}
+          contentContainerStyle={styles.showWizardScrollContent}
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+        >
+          {/* Header */}
+          <View style={styles.showWizardHeader}>
+            <TouchableOpacity
+              style={styles.showWizardBackBtn}
               onPress={() => {
                 if (currentStep === 1 && userType === 'artist') {
+                  resetShowWizard();
                   setCurrentFlow('selection');
                 } else if (currentStep > 1) {
                   prevStep();
@@ -836,28 +1165,56 @@ const Create = () => {
                 }
               }}
             >
-              <Text style={styles.backButtonText}>
-                {currentStep === 1 && userType === 'artist' ? '← Back' : currentStep > 1 ? '← Previous' : '← Back'}
+              <Text style={styles.showWizardBackText}>
+                {currentStep > 1 ? '← Previous' : '← Back'}
               </Text>
             </TouchableOpacity>
           </View>
-          
-          <Text style={styles.wizardTitle}>Promote a Show</Text>
-          <Text style={styles.wizardSubtitle}>Step {currentStep} of {totalSteps}</Text>
-          
-          {/* Progress Indicator */}
-          <View style={styles.progressIndicator}>
-            <View style={styles.progressBar}>
-              <View 
-                style={[styles.progressFill, { width: `${(currentStep / totalSteps) * 100}%` }]}
+
+          {/* Title Section */}
+          <View style={styles.showWizardTitleSection}>
+            <Text style={styles.showWizardEmoji}>{stepIcons[currentStep - 1]}</Text>
+            <Text style={styles.showWizardTitle}>Promote a Show</Text>
+            <Text style={styles.showWizardSubtitle}>
+              Step {currentStep} of {totalSteps}: {stepTitles[currentStep - 1]}
+            </Text>
+          </View>
+
+          {/* Progress Bar with Dots */}
+          <View style={styles.showProgressContainer}>
+            <View style={styles.showProgressBar}>
+              <View
+                style={[
+                  styles.showProgressFill,
+                  { width: `${(currentStep / totalSteps) * 100}%` }
+                ]}
               />
+            </View>
+            <View style={styles.showProgressSteps}>
+              {stepTitles.map((title, index) => (
+                <View
+                  key={index}
+                  style={[
+                    styles.showProgressDot,
+                    index < currentStep && styles.showProgressDotActive,
+                    index === currentStep - 1 && styles.showProgressDotCurrent
+                  ]}
+                >
+                  <Text style={[
+                    styles.showProgressDotText,
+                    index < currentStep && styles.showProgressDotTextActive
+                  ]}>
+                    {index + 1}
+                  </Text>
+                </View>
+              ))}
             </View>
           </View>
 
-          {/* Current Step Content */}
-          <View style={styles.wizardStepContainer}>
-            <Text style={styles.wizardStepTitle}>{stepTitles[currentStep - 1]}</Text>
-            
+          {/* Step Content */}
+          <View style={styles.showStepContainer}>
+            <Text style={styles.showStepTitle}>{stepIcons[currentStep - 1]} {stepTitles[currentStep - 1]}</Text>
+
             {currentStep === 1 && renderVenueStep()}
             {currentStep === 2 && renderLineupStep()}
             {currentStep === 3 && renderDateTimeStep()}
@@ -865,93 +1222,90 @@ const Create = () => {
             {currentStep === 5 && renderSubmitStep()}
           </View>
 
-          {/* Navigation */}
+          {/* Navigation Footer */}
           {currentStep < 5 && (
-            <View style={styles.wizardNavigation}>
-              {currentStep > 1 && (
-                <TouchableOpacity 
-                  style={styles.wizardNavButton} 
-                  onPress={prevStep}
-                >
-                  <Text style={styles.wizardNavButtonText}>Previous</Text>
-                </TouchableOpacity>
-              )}
-              <TouchableOpacity 
+            <View style={styles.showNavFooter}>
+              <TouchableOpacity
                 style={[
-                  styles.wizardNavButton, 
-                  styles.wizardNextButton,
-                  !canProceedFromStep(currentStep) && styles.wizardNavButtonDisabled
-                ]} 
+                  styles.showNavButton,
+                  styles.showNavButtonPrimary,
+                  !canProceedFromStep(currentStep) && styles.showNavButtonDisabled
+                ]}
                 onPress={nextStep}
                 disabled={!canProceedFromStep(currentStep)}
               >
-                <Text style={styles.wizardNavButtonText}>
-                  {currentStep === totalSteps - 1 ? 'Review' : 'Next'}
+                <Text style={styles.showNavButtonText}>
+                  {currentStep === 4 ? 'Ready to Submit' : 'Continue'}
                 </Text>
               </TouchableOpacity>
             </View>
           )}
-        </View>
-      </ScrollView>
+        </ScrollView>
+      </LinearGradient>
     );
   };
 
   // Step 1: Venue Selection
   const renderVenueStep = () => (
-    <View style={styles.stepContainer}>
+    <View style={styles.showStepContent}>
       {showVenue ? (
-        <View style={styles.selectedCard}>
-          <View style={styles.selectedHeader}>
-            <Text style={styles.selectedTitle}>✅ Venue Selected</Text>
-            <TouchableOpacity style={styles.changeButton} onPress={() => setShowVenue(null)}>
-              <Text style={styles.changeButtonText}>Change</Text>
+        <View style={styles.showSelectedCard}>
+          <View style={styles.showSelectedHeader}>
+            <Text style={styles.showSelectedTitle}>✅ Venue Selected</Text>
+            <TouchableOpacity style={styles.showChangeButton} onPress={() => setShowVenue(null)}>
+              <Text style={styles.showChangeButtonText}>Change</Text>
             </TouchableOpacity>
           </View>
-          <Text style={styles.selectedName}>{showVenue.venue_name}</Text>
+          <Text style={styles.showSelectedName}>{showVenue.venue_name}</Text>
           {showVenue.venue_address && (
-            <Text style={styles.selectedAddress}>
-              {typeof showVenue.venue_address === 'string' 
-                ? showVenue.venue_address 
+            <Text style={styles.showSelectedAddress}>
+              {typeof showVenue.venue_address === 'string'
+                ? showVenue.venue_address
                 : showVenue.venue_address.address || 'Address available'
               }
             </Text>
           )}
         </View>
       ) : (
-        <View style={styles.searchContainer}>
-          <Text style={styles.searchInstructions}>Search for a venue to host your show</Text>
+        <View style={styles.showSearchContainer}>
+          <Text style={styles.showSearchInstructions}>Search for a venue to host your show</Text>
           <TextInput
-            style={styles.wizardInput}
+            style={styles.showTextInput}
             placeholder="Type venue name..."
-            placeholderTextColor="#999"
+            placeholderTextColor="rgba(255,255,255,0.5)"
             value={venueSearch}
             onChangeText={setVenueSearch}
           />
           {searchingVenues && (
-            <View style={styles.searchingIndicator}>
-              <ActivityIndicator size="small" color="#2a2882" />
-              <Text style={styles.searchingText}>Searching...</Text>
+            <View style={styles.showSearchLoading}>
+              <ActivityIndicator size="small" color={colors.primary.magenta} />
+              <Text style={styles.showSearchLoadingText}>Searching...</Text>
+            </View>
+          )}
+          {venueResults.length === 0 && venueSearch.length >= 2 && !searchingVenues && (
+            <View style={styles.showSearchEmpty}>
+              <Text style={styles.showSearchEmptyText}>No venues found for "{venueSearch}"</Text>
             </View>
           )}
           {venueResults.map((venue) => (
             <TouchableOpacity
               key={venue.venue_id}
-              style={styles.resultCard}
+              style={styles.showResultCard}
               onPress={() => addVenue(venue)}
             >
-              <View style={styles.resultInfo}>
-                <Text style={styles.resultName}>{venue.venue_name}</Text>
+              <View style={styles.showResultInfo}>
+                <Text style={styles.showResultName}>{venue.venue_name}</Text>
                 {venue.venue_address && (
-                  <Text style={styles.resultAddress}>
-                    {typeof venue.venue_address === 'string' 
-                      ? venue.venue_address 
+                  <Text style={styles.showResultAddress}>
+                    {typeof venue.venue_address === 'string'
+                      ? venue.venue_address
                       : venue.venue_address.address || 'Address available'
                     }
                   </Text>
                 )}
               </View>
-              <View style={styles.selectButton}>
-                <Text style={styles.selectButtonText}>Select</Text>
+              <View style={styles.showSelectButton}>
+                <Text style={styles.showSelectButtonText}>Select</Text>
               </View>
             </TouchableOpacity>
           ))}
@@ -962,53 +1316,56 @@ const Create = () => {
 
   // Step 2: Lineup Building
   const renderLineupStep = () => (
-    <View style={styles.stepContainer}>
-      <Text style={styles.searchInstructions}>
+    <View style={styles.showStepContent}>
+      <Text style={styles.showSearchInstructions}>
         Add at least 2 performers (artists or bands)
       </Text>
-      
+
       {/* Current Lineup */}
       {showMembers.length > 0 && (
-        <View style={styles.currentLineup}>
-          <Text style={styles.lineupHeader}>Current Lineup ({showMembers.length})</Text>
+        <View style={styles.showLineupList}>
+          <Text style={styles.showLineupHeader}>Current Lineup ({showMembers.length})</Text>
           {showMembers.map((member, index) => (
-            <View key={member.show_member_id} style={styles.lineupCard}>
-              <View style={styles.lineupInfo}>
-                <View style={styles.positionBadge}>
-                  <Text style={styles.positionText}>
+            <View key={`lineup-${member.show_member_type}-${member.show_member_id}`} style={styles.showLineupCard}>
+              <View style={styles.showLineupInfo}>
+                <View style={[
+                  styles.showPositionBadge,
+                  member.show_member_position === 'headliner' && styles.showPositionBadgeHeadliner
+                ]}>
+                  <Text style={styles.showPositionText}>
                     {member.show_member_position === 'headliner' ? '⭐' : index + 1}
                   </Text>
                 </View>
-                <View style={styles.memberDetails}>
-                  <Text style={styles.memberName}>{member.show_member_name}</Text>
-                  <Text style={styles.memberType}>
-                    {member.show_member_type === 'band' ? '🎸 Band' : '🎤 Artist'} • 
-                    {member.show_member_position === 'headliner' ? ' Headliner' : ` Position ${member.show_member_position}`}
+                <View style={styles.showLineupDetails}>
+                  <Text style={styles.showLineupName}>{member.show_member_name}</Text>
+                  <Text style={styles.showLineupType}>
+                    {member.show_member_type === 'band' ? '🎸 Band' : '🎤 Artist'}
+                    {member.show_member_position === 'headliner' ? ' • Headliner' : ''}
                   </Text>
                 </View>
               </View>
-              <View style={styles.lineupActions}>
+              <View style={styles.showLineupActions}>
                 {index > 0 && (
-                  <TouchableOpacity 
-                    style={styles.moveBtn}
+                  <TouchableOpacity
+                    style={styles.showMoveBtn}
                     onPress={() => moveShowMember(index, index - 1)}
                   >
-                    <Text style={styles.moveBtnText}>↑</Text>
+                    <Text style={styles.showMoveBtnText}>↑</Text>
                   </TouchableOpacity>
                 )}
                 {index < showMembers.length - 1 && (
-                  <TouchableOpacity 
-                    style={styles.moveBtn}
+                  <TouchableOpacity
+                    style={styles.showMoveBtn}
                     onPress={() => moveShowMember(index, index + 1)}
                   >
-                    <Text style={styles.moveBtnText}>↓</Text>
+                    <Text style={styles.showMoveBtnText}>↓</Text>
                   </TouchableOpacity>
                 )}
-                <TouchableOpacity 
-                  style={styles.removeBtn}
+                <TouchableOpacity
+                  style={styles.showRemoveBtn}
                   onPress={() => removeShowMember(member.show_member_id)}
                 >
-                  <Text style={styles.removeBtnText}>×</Text>
+                  <Text style={styles.showRemoveBtnText}>×</Text>
                 </TouchableOpacity>
               </View>
             </View>
@@ -1016,36 +1373,45 @@ const Create = () => {
         </View>
       )}
 
-      {/* Add Performers */}
-      <View style={styles.addPerformersSection}>
-        <Text style={styles.addPerformersTitle}>Add Performers</Text>
+      {/* Minimum members hint */}
+      {showMembers.length < 2 && (
+        <View style={styles.showMinHint}>
+          <Text style={styles.showMinHintText}>
+            Add {2 - showMembers.length} more performer{showMembers.length === 1 ? '' : 's'} to continue
+          </Text>
+        </View>
+      )}
+
+      {/* Add Performers Search */}
+      <View style={styles.showAddPerformers}>
+        <Text style={styles.showAddPerformersTitle}>Add Performers</Text>
         <TextInput
-          style={styles.wizardInput}
+          style={styles.showTextInput}
           placeholder="Search artists and bands..."
-          placeholderTextColor="#999"
+          placeholderTextColor="rgba(255,255,255,0.5)"
           value={performerSearch}
           onChangeText={setPerformerSearch}
         />
         {searchingPerformers && (
-          <View style={styles.searchingIndicator}>
-            <ActivityIndicator size="small" color="#2a2882" />
-            <Text style={styles.searchingText}>Searching...</Text>
+          <View style={styles.showSearchLoading}>
+            <ActivityIndicator size="small" color={colors.primary.magenta} />
+            <Text style={styles.showSearchLoadingText}>Searching...</Text>
           </View>
         )}
         {performerResults.map((performer) => (
           <TouchableOpacity
-            key={performer.id}
-            style={styles.resultCard}
+            key={`${performer.type}-${performer.id}`}
+            style={styles.showResultCard}
             onPress={() => addPerformerToShow(performer)}
           >
-            <View style={styles.resultInfo}>
-              <Text style={styles.resultName}>{performer.name}</Text>
-              <Text style={styles.resultType}>
+            <View style={styles.showResultInfo}>
+              <Text style={styles.showResultName}>{performer.name}</Text>
+              <Text style={styles.showResultType}>
                 {performer.type === 'band' ? '🎸 Band' : '🎤 Artist'}
               </Text>
             </View>
-            <View style={styles.selectButton}>
-              <Text style={styles.selectButtonText}>Add</Text>
+            <View style={styles.showSelectButton}>
+              <Text style={styles.showSelectButtonText}>+ Add</Text>
             </View>
           </TouchableOpacity>
         ))}
@@ -1055,107 +1421,236 @@ const Create = () => {
 
   // Step 3: Date & Time
   const renderDateTimeStep = () => (
-    <View style={styles.stepContainer}>
-      <Text style={styles.searchInstructions}>
+    <View style={styles.showStepContent}>
+      <Text style={styles.showSearchInstructions}>
         When would you like to have this show?
       </Text>
-      
-      <View style={styles.dateTimeInputContainer}>
-        <View style={styles.dateInputSection}>
-          <Text style={styles.dateTimeLabel}>📅 Date</Text>
-          <TextInput
-            style={styles.dateTimeInput}
-            placeholder="YYYY-MM-DD"
-            placeholderTextColor="#999"
-            value={showDate}
-            onChangeText={setShowDate}
-          />
-          <Text style={styles.inputHelper}>Example: 2024-12-25</Text>
+
+      <View style={styles.showDateTimeContainer}>
+        {/* Date Picker */}
+        <View style={styles.showDateInputSection}>
+          <Text style={styles.showDateTimeLabel}>📅 Date</Text>
+          <TouchableOpacity
+            style={styles.showPickerButton}
+            onPress={() => setShowDatePicker(true)}
+            activeOpacity={0.8}
+          >
+            <Text style={[
+              styles.showPickerButtonText,
+              !showDate && styles.showPickerButtonPlaceholder
+            ]}>
+              {showDate ? formatDisplayDate(selectedDate) : 'Tap to select date'}
+            </Text>
+            <Text style={styles.showPickerIcon}>📅</Text>
+          </TouchableOpacity>
         </View>
-        
-        <View style={styles.timeInputSection}>
-          <Text style={styles.dateTimeLabel}>🕐 Time</Text>
-          <TextInput
-            style={styles.dateTimeInput}
-            placeholder="HH:MM"
-            placeholderTextColor="#999"
-            value={showTime}
-            onChangeText={setShowTime}
-          />
-          <Text style={styles.inputHelper}>Example: 20:00 (8:00 PM)</Text>
+
+        {/* Time Picker */}
+        <View style={styles.showTimeInputSection}>
+          <Text style={styles.showDateTimeLabel}>🕐 Time</Text>
+          <TouchableOpacity
+            style={styles.showPickerButton}
+            onPress={() => setShowTimePicker(true)}
+            activeOpacity={0.8}
+          >
+            <Text style={[
+              styles.showPickerButtonText,
+              !showTime && styles.showPickerButtonPlaceholder
+            ]}>
+              {showTime ? formatDisplayTime(selectedTime) : 'Tap to select time'}
+            </Text>
+            <Text style={styles.showPickerIcon}>🕐</Text>
+          </TouchableOpacity>
         </View>
       </View>
-      
+
+      {/* Preview when both selected */}
       {showDate && showTime && (
-        <View style={styles.datePreview}>
-          <Text style={styles.previewLabel}>Show Preview:</Text>
-          <Text style={styles.previewText}>📅 {showDate} at 🕐 {showTime}</Text>
+        <View style={styles.showDatePreview}>
+          <Text style={styles.showDatePreviewLabel}>Show scheduled for:</Text>
+          <Text style={styles.showDatePreviewText}>
+            {formatDisplayDate(selectedDate)}
+          </Text>
+          <Text style={styles.showDatePreviewTime}>
+            at {formatDisplayTime(selectedTime)}
+          </Text>
         </View>
+      )}
+
+      {/* Date Picker Modal/Component */}
+      {showDatePicker && (
+        Platform.OS === 'ios' ? (
+          <Modal
+            transparent
+            animationType="slide"
+            visible={showDatePicker}
+            onRequestClose={() => setShowDatePicker(false)}
+          >
+            <View style={styles.pickerModalOverlay}>
+              <View style={styles.pickerModalContent}>
+                <View style={styles.pickerModalHeader}>
+                  <Text style={styles.pickerModalTitle}>Select Date</Text>
+                  <TouchableOpacity
+                    style={styles.pickerModalDone}
+                    onPress={() => setShowDatePicker(false)}
+                  >
+                    <Text style={styles.pickerModalDoneText}>Done</Text>
+                  </TouchableOpacity>
+                </View>
+                <DateTimePicker
+                  value={selectedDate}
+                  mode="date"
+                  display="spinner"
+                  onChange={handleDateChange}
+                  minimumDate={new Date()}
+                  textColor="#000"
+                  style={styles.iosPicker}
+                />
+              </View>
+            </View>
+          </Modal>
+        ) : (
+          <DateTimePicker
+            value={selectedDate}
+            mode="date"
+            display="default"
+            onChange={handleDateChange}
+            minimumDate={new Date()}
+          />
+        )
+      )}
+
+      {/* Time Picker Modal/Component */}
+      {showTimePicker && (
+        Platform.OS === 'ios' ? (
+          <Modal
+            transparent
+            animationType="slide"
+            visible={showTimePicker}
+            onRequestClose={() => setShowTimePicker(false)}
+          >
+            <View style={styles.pickerModalOverlay}>
+              <View style={styles.pickerModalContent}>
+                <View style={styles.pickerModalHeader}>
+                  <Text style={styles.pickerModalTitle}>Select Time</Text>
+                  <TouchableOpacity
+                    style={styles.pickerModalDone}
+                    onPress={() => setShowTimePicker(false)}
+                  >
+                    <Text style={styles.pickerModalDoneText}>Done</Text>
+                  </TouchableOpacity>
+                </View>
+                <DateTimePicker
+                  value={selectedTime}
+                  mode="time"
+                  display="spinner"
+                  onChange={handleTimeChange}
+                  textColor="#000"
+                  style={styles.iosPicker}
+                />
+              </View>
+            </View>
+          </Modal>
+        ) : (
+          <DateTimePicker
+            value={selectedTime}
+            mode="time"
+            display="default"
+            onChange={handleTimeChange}
+          />
+        )
       )}
     </View>
   );
 
   // Step 4: Review
   const renderReviewStep = () => (
-    <View style={styles.stepContainer}>
-      <Text style={styles.searchInstructions}>
+    <View style={styles.showStepContent}>
+      <Text style={styles.showSearchInstructions}>
         Review your show details before creating
       </Text>
-      
+
       {/* Venue Review */}
-      <View style={styles.reviewSection}>
-        <Text style={styles.reviewSectionTitle}>📍 Venue</Text>
-        <Text style={styles.reviewText}>{showVenue?.venue_name}</Text>
+      <View style={styles.showReviewCard}>
+        <Text style={styles.showReviewLabel}>📍 Venue</Text>
+        <Text style={styles.showReviewValue}>{showVenue?.venue_name}</Text>
       </View>
 
       {/* Lineup Review */}
-      <View style={styles.reviewSection}>
-        <Text style={styles.reviewSectionTitle}>🎵 Lineup ({showMembers.length} performers)</Text>
+      <View style={styles.showReviewCard}>
+        <Text style={styles.showReviewLabel}>🎵 Lineup ({showMembers.length} performers)</Text>
         {showMembers.map((member, index) => (
-          <Text key={member.show_member_id} style={styles.reviewText}>
-            {index + 1}. {member.show_member_name} 
-            {member.show_member_type === 'band' ? ' (Band)' : ' (Artist)'}
-            {member.show_member_position === 'headliner' ? ' - Headliner' : ''}
-          </Text>
+          <View key={`review-${member.show_member_type}-${member.show_member_id}`} style={styles.showReviewMember}>
+            <Text style={styles.showReviewMemberIcon}>
+              {member.show_member_position === 'headliner' ? '⭐' : `${index + 1}.`}
+            </Text>
+            <Text style={styles.showReviewMemberName}>{member.show_member_name}</Text>
+            <Text style={styles.showReviewMemberType}>
+              {member.show_member_type === 'band' ? 'Band' : 'Artist'}
+            </Text>
+          </View>
         ))}
       </View>
 
       {/* Date Review */}
-      <View style={styles.reviewSection}>
-        <Text style={styles.reviewSectionTitle}>📅 Date & Time</Text>
-        <Text style={styles.reviewText}>
-          {showDate} at {showTime}
-        </Text>
+      <View style={styles.showReviewCard}>
+        <Text style={styles.showReviewLabel}>📅 Date & Time</Text>
+        <Text style={styles.showReviewValue}>{showDate} at {showTime}</Text>
       </View>
 
       {/* Promoter Benefits */}
-      <View style={styles.reviewSection}>
-        <Text style={styles.reviewSectionTitle}>🚀 Promoter Benefits</Text>
-        <Text style={styles.reviewText}>Building your promoter reputation</Text>
-        <Text style={styles.upgradeMessage}>💎 Promote 10 successful shows and receive a promoter upgrade!</Text>
+      <View style={styles.showPromoterInfo}>
+        <Text style={styles.showPromoterTitle}>🚀 Promoter Benefits</Text>
+        <Text style={styles.showPromoterText}>
+          Building your promoter reputation with every show!
+        </Text>
+        <Text style={styles.showPromoterUpgrade}>
+          💎 Promote 10 successful shows for a promoter upgrade!
+        </Text>
       </View>
     </View>
   );
 
   // Step 5: Submit
   const renderSubmitStep = () => (
-    <View style={styles.stepContainer}>
-      <View style={styles.submitContainer}>
-        <Text style={styles.submitTitle}>🎪 Ready to Create Your Show?</Text>
-        <Text style={styles.submitDescription}>
-          Your show will be created and invitations sent to all performers. 
+    <View style={styles.showStepContent}>
+      <View style={styles.showSubmitContainer}>
+        <Text style={styles.showSubmitEmoji}>🎪</Text>
+        <Text style={styles.showSubmitTitle}>Ready to Create Your Show?</Text>
+        <Text style={styles.showSubmitDescription}>
+          Your show will be created and invitations sent to all performers and the venue.
           They'll need to accept before the show becomes active.
         </Text>
-        
+
+        <View style={styles.showSubmitSummary}>
+          <Text style={styles.showSubmitSummaryText}>
+            📍 {showVenue?.venue_name}
+          </Text>
+          <Text style={styles.showSubmitSummaryText}>
+            🎵 {showMembers.length} performers
+          </Text>
+          <Text style={styles.showSubmitSummaryText}>
+            📅 {showDate} at {showTime}
+          </Text>
+        </View>
+
         <TouchableOpacity
-          style={[styles.finalSubmitButton, showLoading && styles.buttonDisabled]}
+          style={[
+            styles.showCreateButton,
+            showLoading && styles.showCreateButtonDisabled
+          ]}
           onPress={handleCreateShow}
           disabled={showLoading}
         >
           {showLoading ? (
             <ActivityIndicator color="#fff" size="small" />
           ) : (
-            <Text style={styles.finalSubmitButtonText}>🎉 Create Show</Text>
+            <>
+              <Text style={styles.showCreateButtonText}>Create Show</Text>
+              <Text style={styles.showCreateButtonSubtext}>
+                Invitations will be sent automatically
+              </Text>
+            </>
           )}
         </TouchableOpacity>
       </View>
@@ -2105,6 +2600,1036 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     fontSize: 14,
     fontWeight: 'bold',
+  },
+
+  // ============================================
+  // NEW BAND WIZARD STYLES
+  // ============================================
+  bandWizardGradient: {
+    flex: 1,
+  },
+  bandWizardScroll: {
+    flex: 1,
+  },
+  bandWizardScrollContent: {
+    padding: spacing.lg,
+    paddingBottom: 100,
+  },
+  bandWizardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: spacing.lg,
+    marginTop: spacing.md,
+  },
+  bandWizardBackBtn: {
+    backgroundColor: 'rgba(255, 255, 255, 0.15)',
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: borderRadius.lg,
+  },
+  bandWizardBackText: {
+    color: '#fff',
+    fontSize: fonts.size.sm,
+    fontWeight: '600',
+  },
+  bandWizardTitleSection: {
+    alignItems: 'center',
+    marginBottom: spacing.xl,
+  },
+  bandWizardEmoji: {
+    fontSize: 48,
+    marginBottom: spacing.sm,
+  },
+  bandWizardTitle: {
+    fontSize: fonts.size['2xl'],
+    fontWeight: 'bold',
+    color: '#fff',
+    fontFamily: fonts.family.display,
+    marginBottom: spacing.xs,
+  },
+  bandWizardSubtitle: {
+    fontSize: fonts.size.md,
+    color: 'rgba(255, 255, 255, 0.8)',
+    fontFamily: fonts.family.regular,
+  },
+
+  // Progress Indicator
+  bandProgressContainer: {
+    marginBottom: spacing.xl,
+  },
+  bandProgressBar: {
+    height: 4,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    borderRadius: 2,
+    marginBottom: spacing.md,
+    overflow: 'hidden',
+  },
+  bandProgressFill: {
+    height: '100%',
+    backgroundColor: colors.primary.magenta,
+    borderRadius: 2,
+  },
+  bandProgressSteps: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingHorizontal: spacing.xl,
+  },
+  bandProgressDot: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  bandProgressDotActive: {
+    backgroundColor: colors.primary.magenta,
+  },
+  bandProgressDotCurrent: {
+    backgroundColor: '#fff',
+    borderWidth: 3,
+    borderColor: colors.primary.magenta,
+  },
+  bandProgressDotText: {
+    color: 'rgba(255, 255, 255, 0.6)',
+    fontSize: fonts.size.sm,
+    fontWeight: 'bold',
+  },
+  bandProgressDotTextActive: {
+    color: '#fff',
+  },
+
+  // Step Container
+  bandStepContainer: {
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    borderRadius: borderRadius.xl,
+    padding: spacing.lg,
+    marginBottom: spacing.lg,
+  },
+  bandStepContent: {
+    // Container for step content
+  },
+
+  // Band Details Step (Step 1)
+  bandInputGroup: {
+    marginBottom: spacing.lg,
+  },
+  bandInputLabel: {
+    color: '#fff',
+    fontSize: fonts.size.md,
+    fontWeight: '600',
+    marginBottom: spacing.sm,
+    fontFamily: fonts.family.semiBold,
+  },
+  bandTextInput: {
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    borderWidth: 2,
+    borderColor: 'rgba(255, 255, 255, 0.2)',
+    borderRadius: borderRadius.base,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.md,
+    fontSize: fonts.size.base,
+    color: '#fff',
+    fontFamily: fonts.family.regular,
+  },
+  bandInputHint: {
+    color: colors.status.warning,
+    fontSize: fonts.size.sm,
+    marginTop: spacing.xs,
+  },
+  bandTipBox: {
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    borderRadius: borderRadius.base,
+    padding: spacing.md,
+    borderLeftWidth: 3,
+    borderLeftColor: colors.primary.magenta,
+  },
+  bandTipTitle: {
+    color: '#fff',
+    fontSize: fonts.size.sm,
+    fontWeight: '600',
+    marginBottom: spacing.sm,
+  },
+  bandTipText: {
+    color: 'rgba(255, 255, 255, 0.7)',
+    fontSize: fonts.size.sm,
+    marginBottom: spacing.xs,
+  },
+
+  // Band Members Step (Step 2)
+  bandMembersList: {
+    marginBottom: spacing.lg,
+  },
+  bandMembersHeader: {
+    color: '#fff',
+    fontSize: fonts.size.md,
+    fontWeight: '600',
+    marginBottom: spacing.md,
+    fontFamily: fonts.family.semiBold,
+  },
+  bandMemberCard: {
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+    borderRadius: borderRadius.base,
+    padding: spacing.md,
+    marginBottom: spacing.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  bandMemberInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
+  bandMemberBadge: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(255, 255, 255, 0.15)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: spacing.md,
+  },
+  bandMemberBadgeCreator: {
+    backgroundColor: colors.primary.magenta,
+  },
+  bandMemberBadgeText: {
+    fontSize: 18,
+  },
+  bandMemberDetails: {
+    flex: 1,
+  },
+  bandMemberName: {
+    color: '#fff',
+    fontSize: fonts.size.base,
+    fontWeight: '600',
+    marginBottom: 2,
+  },
+  bandMemberRole: {
+    color: 'rgba(255, 255, 255, 0.6)',
+    fontSize: fonts.size.sm,
+  },
+  bandMemberRemove: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: 'rgba(220, 53, 69, 0.8)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  bandMemberRemoveText: {
+    color: '#fff',
+    fontSize: 18,
+    fontWeight: 'bold',
+  },
+
+  // Search Section
+  bandSearchSection: {
+    marginTop: spacing.md,
+  },
+  bandSearchTitle: {
+    color: '#fff',
+    fontSize: fonts.size.md,
+    fontWeight: '600',
+    marginBottom: spacing.sm,
+  },
+  bandSearchLoading: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: spacing.md,
+  },
+  bandSearchLoadingText: {
+    color: 'rgba(255, 255, 255, 0.7)',
+    marginLeft: spacing.sm,
+    fontSize: fonts.size.sm,
+  },
+  bandSearchEmpty: {
+    paddingVertical: spacing.lg,
+    alignItems: 'center',
+  },
+  bandSearchEmptyText: {
+    color: 'rgba(255, 255, 255, 0.6)',
+    fontSize: fonts.size.sm,
+    textAlign: 'center',
+  },
+  bandSearchResults: {
+    marginTop: spacing.md,
+  },
+  bandSearchResultCard: {
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    borderRadius: borderRadius.base,
+    padding: spacing.md,
+    marginBottom: spacing.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.1)',
+  },
+  bandSearchResultInfo: {
+    flex: 1,
+  },
+  bandSearchResultName: {
+    color: '#fff',
+    fontSize: fonts.size.base,
+    fontWeight: '600',
+  },
+  bandSearchResultType: {
+    color: 'rgba(255, 255, 255, 0.6)',
+    fontSize: fonts.size.sm,
+  },
+  bandSearchResultAdd: {
+    backgroundColor: colors.primary.magenta,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: borderRadius.base,
+  },
+  bandSearchResultAddText: {
+    color: '#fff',
+    fontSize: fonts.size.sm,
+    fontWeight: '600',
+  },
+  bandMinMembersHint: {
+    backgroundColor: 'rgba(255, 193, 7, 0.15)',
+    borderRadius: borderRadius.base,
+    padding: spacing.md,
+    marginTop: spacing.md,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 193, 7, 0.3)',
+  },
+  bandMinMembersText: {
+    color: colors.status.warning,
+    fontSize: fonts.size.sm,
+    textAlign: 'center',
+    fontWeight: '500',
+  },
+
+  // Review Step (Step 3)
+  bandReviewCard: {
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+    borderRadius: borderRadius.base,
+    padding: spacing.md,
+    marginBottom: spacing.md,
+  },
+  bandReviewLabel: {
+    color: 'rgba(255, 255, 255, 0.6)',
+    fontSize: fonts.size.sm,
+    marginBottom: spacing.xs,
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+  },
+  bandReviewValue: {
+    color: '#fff',
+    fontSize: fonts.size.xl,
+    fontWeight: 'bold',
+    fontFamily: fonts.family.display,
+  },
+  bandReviewMember: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: spacing.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255, 255, 255, 0.1)',
+  },
+  bandReviewMemberIcon: {
+    fontSize: 16,
+    marginRight: spacing.sm,
+  },
+  bandReviewMemberName: {
+    flex: 1,
+    color: '#fff',
+    fontSize: fonts.size.base,
+  },
+  bandReviewMemberRole: {
+    color: 'rgba(255, 255, 255, 0.5)',
+    fontSize: fonts.size.sm,
+  },
+  bandReviewInfo: {
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    borderRadius: borderRadius.base,
+    padding: spacing.md,
+    marginBottom: spacing.lg,
+    borderLeftWidth: 3,
+    borderLeftColor: colors.primary.magenta,
+  },
+  bandReviewInfoTitle: {
+    color: '#fff',
+    fontSize: fonts.size.md,
+    fontWeight: '600',
+    marginBottom: spacing.sm,
+  },
+  bandReviewInfoText: {
+    color: 'rgba(255, 255, 255, 0.7)',
+    fontSize: fonts.size.sm,
+    marginBottom: spacing.xs,
+    lineHeight: 20,
+  },
+  bandCreateButton: {
+    backgroundColor: colors.status.success,
+    borderRadius: borderRadius.lg,
+    paddingVertical: spacing.lg,
+    paddingHorizontal: spacing.xl,
+    alignItems: 'center',
+    shadowColor: colors.status.success,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  bandCreateButtonDisabled: {
+    opacity: 0.6,
+  },
+  bandCreateButtonText: {
+    color: '#fff',
+    fontSize: fonts.size.lg,
+    fontWeight: 'bold',
+    fontFamily: fonts.family.bold,
+  },
+  bandCreateButtonSubtext: {
+    color: 'rgba(255, 255, 255, 0.8)',
+    fontSize: fonts.size.sm,
+    marginTop: spacing.xs,
+  },
+
+  // Navigation Footer
+  bandNavFooter: {
+    paddingTop: spacing.md,
+  },
+  bandNavButton: {
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.xl,
+    borderRadius: borderRadius.base,
+    alignItems: 'center',
+  },
+  bandNavButtonPrimary: {
+    backgroundColor: colors.primary.magenta,
+  },
+  bandNavButtonDisabled: {
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    opacity: 0.6,
+  },
+  bandNavButtonText: {
+    color: '#fff',
+    fontSize: fonts.size.base,
+    fontWeight: 'bold',
+  },
+
+  // ============================================
+  // POLISHED SHOW WIZARD STYLES
+  // ============================================
+  showWizardGradient: {
+    flex: 1,
+  },
+  showWizardScroll: {
+    flex: 1,
+  },
+  showWizardScrollContent: {
+    padding: spacing.lg,
+    paddingBottom: 100,
+  },
+  showWizardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: spacing.lg,
+    marginTop: spacing.md,
+  },
+  showWizardBackBtn: {
+    backgroundColor: 'rgba(255, 255, 255, 0.15)',
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: borderRadius.lg,
+  },
+  showWizardBackText: {
+    color: '#fff',
+    fontSize: fonts.size.sm,
+    fontWeight: '600',
+  },
+  showWizardTitleSection: {
+    alignItems: 'center',
+    marginBottom: spacing.xl,
+  },
+  showWizardEmoji: {
+    fontSize: 48,
+    marginBottom: spacing.sm,
+  },
+  showWizardTitle: {
+    fontSize: fonts.size['2xl'],
+    fontWeight: 'bold',
+    color: '#fff',
+    fontFamily: fonts.family.display,
+    marginBottom: spacing.xs,
+  },
+  showWizardSubtitle: {
+    fontSize: fonts.size.md,
+    color: 'rgba(255, 255, 255, 0.8)',
+    fontFamily: fonts.family.regular,
+  },
+
+  // Show Progress Indicator
+  showProgressContainer: {
+    marginBottom: spacing.xl,
+  },
+  showProgressBar: {
+    height: 4,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    borderRadius: 2,
+    marginBottom: spacing.md,
+    overflow: 'hidden',
+  },
+  showProgressFill: {
+    height: '100%',
+    backgroundColor: colors.primary.magenta,
+    borderRadius: 2,
+  },
+  showProgressSteps: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingHorizontal: spacing.sm,
+  },
+  showProgressDot: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  showProgressDotActive: {
+    backgroundColor: colors.primary.magenta,
+  },
+  showProgressDotCurrent: {
+    backgroundColor: '#fff',
+    borderWidth: 2,
+    borderColor: colors.primary.magenta,
+  },
+  showProgressDotText: {
+    color: 'rgba(255, 255, 255, 0.6)',
+    fontSize: fonts.size.xs,
+    fontWeight: 'bold',
+  },
+  showProgressDotTextActive: {
+    color: '#fff',
+  },
+
+  // Show Step Container
+  showStepContainer: {
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    borderRadius: borderRadius.xl,
+    padding: spacing.lg,
+    marginBottom: spacing.lg,
+  },
+  showStepTitle: {
+    color: '#fff',
+    fontSize: fonts.size.lg,
+    fontWeight: 'bold',
+    marginBottom: spacing.lg,
+    textAlign: 'center',
+    fontFamily: fonts.family.semiBold,
+  },
+
+  // Show Navigation Footer
+  showNavFooter: {
+    paddingTop: spacing.md,
+  },
+  showNavButton: {
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.xl,
+    borderRadius: borderRadius.base,
+    alignItems: 'center',
+  },
+  showNavButtonPrimary: {
+    backgroundColor: colors.primary.magenta,
+  },
+  showNavButtonDisabled: {
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    opacity: 0.6,
+  },
+  showNavButtonText: {
+    color: '#fff',
+    fontSize: fonts.size.base,
+    fontWeight: 'bold',
+  },
+
+  // Show Step Content Styles
+  showStepContent: {
+    // Container for step content
+  },
+  showSearchContainer: {
+    // Search container
+  },
+  showSearchInstructions: {
+    color: 'rgba(255, 255, 255, 0.8)',
+    fontSize: fonts.size.md,
+    textAlign: 'center',
+    marginBottom: spacing.lg,
+    lineHeight: 22,
+  },
+  showTextInput: {
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    borderWidth: 2,
+    borderColor: 'rgba(255, 255, 255, 0.2)',
+    borderRadius: borderRadius.base,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.md,
+    fontSize: fonts.size.base,
+    color: '#fff',
+    marginBottom: spacing.md,
+  },
+  showSearchLoading: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: spacing.md,
+  },
+  showSearchLoadingText: {
+    color: 'rgba(255, 255, 255, 0.7)',
+    marginLeft: spacing.sm,
+    fontSize: fonts.size.sm,
+  },
+  showSearchEmpty: {
+    paddingVertical: spacing.lg,
+    alignItems: 'center',
+  },
+  showSearchEmptyText: {
+    color: 'rgba(255, 255, 255, 0.6)',
+    fontSize: fonts.size.sm,
+    textAlign: 'center',
+  },
+
+  // Selected Venue Card
+  showSelectedCard: {
+    backgroundColor: 'rgba(40, 167, 69, 0.2)',
+    borderWidth: 2,
+    borderColor: colors.status.success,
+    borderRadius: borderRadius.base,
+    padding: spacing.md,
+  },
+  showSelectedHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: spacing.sm,
+  },
+  showSelectedTitle: {
+    color: colors.status.success,
+    fontSize: fonts.size.md,
+    fontWeight: '600',
+  },
+  showChangeButton: {
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+    borderRadius: borderRadius.base,
+  },
+  showChangeButtonText: {
+    color: '#fff',
+    fontSize: fonts.size.sm,
+    fontWeight: '600',
+  },
+  showSelectedName: {
+    color: '#fff',
+    fontSize: fonts.size.lg,
+    fontWeight: 'bold',
+  },
+  showSelectedAddress: {
+    color: 'rgba(255, 255, 255, 0.7)',
+    fontSize: fonts.size.sm,
+    marginTop: spacing.xs,
+  },
+
+  // Result Cards
+  showResultCard: {
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+    borderRadius: borderRadius.base,
+    padding: spacing.md,
+    marginBottom: spacing.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.1)',
+  },
+  showResultInfo: {
+    flex: 1,
+  },
+  showResultName: {
+    color: '#fff',
+    fontSize: fonts.size.base,
+    fontWeight: '600',
+  },
+  showResultAddress: {
+    color: 'rgba(255, 255, 255, 0.6)',
+    fontSize: fonts.size.sm,
+    marginTop: 2,
+  },
+  showResultType: {
+    color: 'rgba(255, 255, 255, 0.6)',
+    fontSize: fonts.size.sm,
+  },
+  showSelectButton: {
+    backgroundColor: colors.primary.magenta,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: borderRadius.base,
+  },
+  showSelectButtonText: {
+    color: '#fff',
+    fontSize: fonts.size.sm,
+    fontWeight: '600',
+  },
+
+  // Lineup Styles
+  showLineupList: {
+    marginBottom: spacing.lg,
+  },
+  showLineupHeader: {
+    color: '#fff',
+    fontSize: fonts.size.md,
+    fontWeight: '600',
+    marginBottom: spacing.md,
+  },
+  showLineupCard: {
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+    borderRadius: borderRadius.base,
+    padding: spacing.md,
+    marginBottom: spacing.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderLeftWidth: 3,
+    borderLeftColor: colors.primary.magenta,
+  },
+  showLineupInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
+  showPositionBadge: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: 'rgba(255, 255, 255, 0.15)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: spacing.md,
+  },
+  showPositionBadgeHeadliner: {
+    backgroundColor: colors.primary.magenta,
+  },
+  showPositionText: {
+    color: '#fff',
+    fontSize: fonts.size.sm,
+    fontWeight: 'bold',
+  },
+  showLineupDetails: {
+    flex: 1,
+  },
+  showLineupName: {
+    color: '#fff',
+    fontSize: fonts.size.base,
+    fontWeight: '600',
+  },
+  showLineupType: {
+    color: 'rgba(255, 255, 255, 0.6)',
+    fontSize: fonts.size.sm,
+  },
+  showLineupActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  showMoveBtn: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 4,
+  },
+  showMoveBtnText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: 'bold',
+  },
+  showRemoveBtn: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: 'rgba(220, 53, 69, 0.8)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  showRemoveBtnText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  showMinHint: {
+    backgroundColor: 'rgba(255, 193, 7, 0.15)',
+    borderRadius: borderRadius.base,
+    padding: spacing.md,
+    marginBottom: spacing.lg,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 193, 7, 0.3)',
+  },
+  showMinHintText: {
+    color: colors.status.warning,
+    fontSize: fonts.size.sm,
+    textAlign: 'center',
+    fontWeight: '500',
+  },
+  showAddPerformers: {
+    marginTop: spacing.md,
+  },
+  showAddPerformersTitle: {
+    color: '#fff',
+    fontSize: fonts.size.md,
+    fontWeight: '600',
+    marginBottom: spacing.sm,
+  },
+
+  // Date/Time Styles
+  showDateTimeContainer: {
+    // Container
+  },
+  showDateInputSection: {
+    marginBottom: spacing.lg,
+  },
+  showTimeInputSection: {
+    marginBottom: spacing.md,
+  },
+  showDateTimeLabel: {
+    color: '#fff',
+    fontSize: fonts.size.md,
+    fontWeight: '600',
+    marginBottom: spacing.sm,
+  },
+  showInputHelper: {
+    color: 'rgba(255, 255, 255, 0.5)',
+    fontSize: fonts.size.sm,
+    fontStyle: 'italic',
+    marginTop: -spacing.sm,
+  },
+  showDatePreview: {
+    backgroundColor: 'rgba(40, 167, 69, 0.2)',
+    borderRadius: borderRadius.base,
+    padding: spacing.md,
+    marginTop: spacing.md,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: colors.status.success,
+  },
+  showDatePreviewLabel: {
+    color: colors.status.success,
+    fontSize: fonts.size.sm,
+    fontWeight: '600',
+    marginBottom: spacing.xs,
+  },
+  showDatePreviewText: {
+    color: '#fff',
+    fontSize: fonts.size.lg,
+    fontWeight: 'bold',
+  },
+  showDatePreviewTime: {
+    color: 'rgba(255, 255, 255, 0.9)',
+    fontSize: fonts.size.md,
+    marginTop: spacing.xs,
+  },
+
+  // Picker Button Styles
+  showPickerButton: {
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    borderWidth: 2,
+    borderColor: 'rgba(255, 255, 255, 0.2)',
+    borderRadius: borderRadius.base,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.lg,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  showPickerButtonText: {
+    color: '#fff',
+    fontSize: fonts.size.base,
+    flex: 1,
+  },
+  showPickerButtonPlaceholder: {
+    color: 'rgba(255, 255, 255, 0.5)',
+  },
+  showPickerIcon: {
+    fontSize: 20,
+    marginLeft: spacing.sm,
+  },
+
+  // Picker Modal Styles (iOS)
+  pickerModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'flex-end',
+  },
+  pickerModalContent: {
+    backgroundColor: '#fff',
+    borderTopLeftRadius: borderRadius.xl,
+    borderTopRightRadius: borderRadius.xl,
+    paddingBottom: 30,
+  },
+  pickerModalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: spacing.md,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e0e0e0',
+  },
+  pickerModalTitle: {
+    fontSize: fonts.size.lg,
+    fontWeight: '600',
+    color: '#333',
+  },
+  pickerModalDone: {
+    backgroundColor: colors.primary.magenta,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: borderRadius.base,
+  },
+  pickerModalDoneText: {
+    color: '#fff',
+    fontSize: fonts.size.base,
+    fontWeight: '600',
+  },
+  iosPicker: {
+    height: 200,
+  },
+
+  // Review Styles
+  showReviewCard: {
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+    borderRadius: borderRadius.base,
+    padding: spacing.md,
+    marginBottom: spacing.md,
+  },
+  showReviewLabel: {
+    color: 'rgba(255, 255, 255, 0.6)',
+    fontSize: fonts.size.sm,
+    marginBottom: spacing.xs,
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+  },
+  showReviewValue: {
+    color: '#fff',
+    fontSize: fonts.size.lg,
+    fontWeight: 'bold',
+  },
+  showReviewMember: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: spacing.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255, 255, 255, 0.1)',
+  },
+  showReviewMemberIcon: {
+    color: '#fff',
+    fontSize: fonts.size.sm,
+    width: 24,
+  },
+  showReviewMemberName: {
+    flex: 1,
+    color: '#fff',
+    fontSize: fonts.size.base,
+  },
+  showReviewMemberType: {
+    color: 'rgba(255, 255, 255, 0.5)',
+    fontSize: fonts.size.sm,
+  },
+  showPromoterInfo: {
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    borderRadius: borderRadius.base,
+    padding: spacing.md,
+    borderLeftWidth: 3,
+    borderLeftColor: colors.primary.magenta,
+  },
+  showPromoterTitle: {
+    color: '#fff',
+    fontSize: fonts.size.md,
+    fontWeight: '600',
+    marginBottom: spacing.sm,
+  },
+  showPromoterText: {
+    color: 'rgba(255, 255, 255, 0.7)',
+    fontSize: fonts.size.sm,
+    marginBottom: spacing.xs,
+  },
+  showPromoterUpgrade: {
+    color: colors.primary.magenta,
+    fontSize: fonts.size.sm,
+    fontWeight: '600',
+    marginTop: spacing.sm,
+  },
+
+  // Submit Step Styles
+  showSubmitContainer: {
+    alignItems: 'center',
+    paddingVertical: spacing.lg,
+  },
+  showSubmitEmoji: {
+    fontSize: 64,
+    marginBottom: spacing.md,
+  },
+  showSubmitTitle: {
+    color: '#fff',
+    fontSize: fonts.size.xl,
+    fontWeight: 'bold',
+    textAlign: 'center',
+    marginBottom: spacing.md,
+    fontFamily: fonts.family.display,
+  },
+  showSubmitDescription: {
+    color: 'rgba(255, 255, 255, 0.8)',
+    fontSize: fonts.size.md,
+    textAlign: 'center',
+    lineHeight: 22,
+    marginBottom: spacing.lg,
+  },
+  showSubmitSummary: {
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    borderRadius: borderRadius.base,
+    padding: spacing.md,
+    marginBottom: spacing.xl,
+    width: '100%',
+  },
+  showSubmitSummaryText: {
+    color: '#fff',
+    fontSize: fonts.size.base,
+    marginBottom: spacing.sm,
+    textAlign: 'center',
+  },
+  showCreateButton: {
+    backgroundColor: colors.status.success,
+    borderRadius: borderRadius.lg,
+    paddingVertical: spacing.lg,
+    paddingHorizontal: spacing.xl,
+    alignItems: 'center',
+    shadowColor: colors.status.success,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 4,
+    width: '100%',
+  },
+  showCreateButtonDisabled: {
+    opacity: 0.6,
+  },
+  showCreateButtonText: {
+    color: '#fff',
+    fontSize: fonts.size.lg,
+    fontWeight: 'bold',
+    fontFamily: fonts.family.bold,
+  },
+  showCreateButtonSubtext: {
+    color: 'rgba(255, 255, 255, 0.8)',
+    fontSize: fonts.size.sm,
+    marginTop: spacing.xs,
   },
 });
 

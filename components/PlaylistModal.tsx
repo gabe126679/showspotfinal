@@ -8,7 +8,6 @@ import {
   TextInput,
   ScrollView,
   Image,
-  Alert,
   ActivityIndicator,
   Dimensions,
   KeyboardAvoidingView,
@@ -19,6 +18,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { supabase } from '../lib/supabase';
 import { playlistService, PlaylistSongData } from '../services/playlistService';
 import { songPurchaseService, SongPurchase } from '../services/songPurchaseService';
+import { ToastManager } from './Toast';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
@@ -216,12 +216,12 @@ const PlaylistModal: React.FC<PlaylistModalProps> = ({ visible, onClose, song })
         }
       }
       
-      Alert.alert('Success', `${selectedSongs.size} song${selectedSongs.size !== 1 ? 's' : ''} added to playlist!`);
+      ToastManager.success(`${selectedSongs.size} song${selectedSongs.size !== 1 ? 's' : ''} added to playlist!`);
       setSelectedSongs(new Set([song.song_id])); // Reset to just current song
       onClose();
     } catch (error) {
       console.error('Error adding songs to playlist:', error);
-      Alert.alert('Error', 'Could not add songs to playlist');
+      ToastManager.error('Could not add songs to playlist');
     } finally {
       setLoading(false);
     }
@@ -229,12 +229,12 @@ const PlaylistModal: React.FC<PlaylistModalProps> = ({ visible, onClose, song })
 
   const handleCreatePlaylist = async () => {
     if (!newPlaylistName.trim()) {
-      Alert.alert('Error', 'Please enter a playlist name');
+      ToastManager.error('Please enter a playlist name');
       return;
     }
 
     if (selectedSongs.size === 0) {
-      Alert.alert('Error', 'Please select at least one song');
+      ToastManager.error('Please select at least one song');
       return;
     }
 
@@ -265,7 +265,7 @@ const PlaylistModal: React.FC<PlaylistModalProps> = ({ visible, onClose, song })
       });
 
       if (!result.success || !result.data) {
-        Alert.alert('Error', result.error || 'Could not create playlist');
+        ToastManager.error(result.error || 'Could not create playlist');
         return;
       }
 
@@ -284,14 +284,14 @@ const PlaylistModal: React.FC<PlaylistModalProps> = ({ visible, onClose, song })
         }
       }
 
-      Alert.alert('Success', `Playlist "${newPlaylistName}" created with ${selectedSongs.size} song${selectedSongs.size !== 1 ? 's' : ''}!`);
+      ToastManager.success(`Playlist "${newPlaylistName}" created with ${selectedSongs.size} song${selectedSongs.size !== 1 ? 's' : ''}!`);
       setNewPlaylistName('');
       setSelectedSongs(new Set([song.song_id]));
       setShowCreatePlaylist(false);
       onClose();
     } catch (error) {
       console.error('Error creating playlist:', error);
-      Alert.alert('Error', 'Could not create playlist');
+      ToastManager.error('Could not create playlist');
     } finally {
       setLoading(false);
     }
@@ -349,20 +349,17 @@ const PlaylistModal: React.FC<PlaylistModalProps> = ({ visible, onClose, song })
                     <Text style={styles.songTitle}>{song.song_title}</Text>
                     <Text style={styles.songArtist}>Now Playing</Text>
                   </View>
-                  <TouchableOpacity 
-                    style={[
-                      styles.addButton,
-                      selectedSongs.has(song.song_id) && styles.addButtonSelected
-                    ]}
-                    onPress={() => toggleSongSelection(song.song_id)}
-                  >
+                  <View style={[
+                    styles.addButton,
+                    selectedSongs.has(song.song_id) && styles.addButtonSelected
+                  ]}>
                     <Text style={[
                       styles.addButtonText,
                       selectedSongs.has(song.song_id) && styles.addButtonTextSelected
                     ]}>
                       {selectedSongs.has(song.song_id) ? '✓' : '+'}
                     </Text>
-                  </TouchableOpacity>
+                  </View>
                 </TouchableOpacity>
               </View>
 
@@ -391,20 +388,17 @@ const PlaylistModal: React.FC<PlaylistModalProps> = ({ visible, onClose, song })
                           {purchasedSong.artist_name || purchasedSong.band_name || 'Unknown Artist'}
                         </Text>
                       </View>
-                      <TouchableOpacity 
-                        style={[
-                          styles.addButton,
-                          selectedSongs.has(purchasedSong.song_id) && styles.addButtonSelected
-                        ]}
-                        onPress={() => toggleSongSelection(purchasedSong.song_id)}
-                      >
+                      <View style={[
+                        styles.addButton,
+                        selectedSongs.has(purchasedSong.song_id) && styles.addButtonSelected
+                      ]}>
                         <Text style={[
                           styles.addButtonText,
                           selectedSongs.has(purchasedSong.song_id) && styles.addButtonTextSelected
                         ]}>
                           {selectedSongs.has(purchasedSong.song_id) ? '✓' : '+'}
                         </Text>
-                      </TouchableOpacity>
+                      </View>
                     </TouchableOpacity>
                   ))}
                 </View>

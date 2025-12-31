@@ -7,11 +7,11 @@ import {
   StyleSheet,
   Animated,
   ActivityIndicator,
-  Alert,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { ratingService, EntityType, RatingInfo } from '../services/ratingService';
 import { supabase } from '../lib/supabase';
+import { ToastManager } from './Toast';
 
 interface RatingModalProps {
   visible: boolean;
@@ -88,11 +88,7 @@ const RatingModal: React.FC<RatingModalProps> = ({
 
   const handleStarPress = (rating: number) => {
     if (currentRatingInfo?.hasRated) {
-      Alert.alert(
-        'Already Rated',
-        `You have already rated this ${entityType}. You can only rate once.`,
-        [{ text: 'OK' }]
-      );
+      ToastManager.info(`You have already rated this ${entityType}. You can only rate once.`);
       return;
     }
     setSelectedRating(rating);
@@ -100,27 +96,23 @@ const RatingModal: React.FC<RatingModalProps> = ({
 
   const handleSubmitRating = async () => {
     if (!currentUser) {
-      Alert.alert('Not Logged In', 'Please log in to submit a rating.');
+      ToastManager.error('Please log in to submit a rating');
       return;
     }
 
     if (selectedRating === 0) {
-      Alert.alert('No Rating Selected', 'Please select a star rating before submitting.');
+      ToastManager.error('Please select a star rating before submitting');
       return;
     }
 
     if (currentRatingInfo?.hasRated) {
-      Alert.alert(
-        'Already Rated',
-        `You have already rated this ${entityType}. You can only rate once.`,
-        [{ text: 'OK' }]
-      );
+      ToastManager.info(`You have already rated this ${entityType}. You can only rate once.`);
       return;
     }
 
     try {
       setSubmitting(true);
-      
+
       const result = await ratingService.rateEntity(
         entityId,
         entityType,
@@ -131,23 +123,14 @@ const RatingModal: React.FC<RatingModalProps> = ({
       if (result.success && result.data) {
         setCurrentRatingInfo(result.data);
         onRatingSubmitted?.(result.data);
-        
-        Alert.alert(
-          'Rating Submitted',
-          `Thank you for rating ${entityName}!`,
-          [
-            {
-              text: 'OK',
-              onPress: onClose,
-            },
-          ]
-        );
+        ToastManager.success(`Thank you for rating ${entityName}!`);
+        onClose();
       } else {
-        Alert.alert('Error', result.error || 'Failed to submit rating. Please try again.');
+        ToastManager.error(result.error || 'Failed to submit rating. Please try again.');
       }
     } catch (error) {
       console.error('Error submitting rating:', error);
-      Alert.alert('Error', 'Failed to submit rating. Please try again.');
+      ToastManager.error('Failed to submit rating. Please try again.');
     } finally {
       setSubmitting(false);
     }

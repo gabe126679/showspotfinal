@@ -201,11 +201,11 @@ const SignUp = ({ navigation }: Props) => {
         ToastManager.error('Google sign in is not ready. Please try again.');
       }
     } else if (provider === 'guest') {
-      // Guest mode - just navigate to the app
+      // Guest mode - navigate to user type selection for personalization
       try {
         setSocialLoading('guest');
         await signInAsGuest();
-        navigation.navigate('BottomTabs');
+        navigation.navigate('UserTypeSelection');
       } catch (err) {
         console.error('Guest signup error:', err);
         ToastManager.error('An unexpected error occurred. Please try again.');

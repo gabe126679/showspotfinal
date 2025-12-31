@@ -124,7 +124,7 @@ const uploadAndContinue = async () => {
       throw new Error('Failed to update profile.');
     }
 
-    navigation.navigate('BottomTabs');
+    navigation.navigate('UserTypeSelection');
   } catch (err: any) {
     Alert.alert('Upload Failed', err.message || 'Something went wrong.');
   } finally {

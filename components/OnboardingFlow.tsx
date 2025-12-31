@@ -63,40 +63,47 @@ export const ONBOARDING_TARGETS = {
   },
 };
 
-// Tutorial content for each screen
+// Tutorial content for each screen - Action-oriented per 2025 best practices
 const TUTORIAL_CONTENT: Record<TutorialStep, SpotlightStep[]> = {
-  welcome: [], // Handled by WelcomeScreen
+  welcome: [], // Handled by InitialOnboarding component
   map: [
     {
       target: ONBOARDING_TARGETS.mapCenter,
-      title: 'Discover Live Shows',
-      description: 'Tap on venue markers to see upcoming shows near you. The map shows all active venues in your area.',
-      buttonText: 'Next',
+      title: 'Tap a Venue',
+      description: 'See a marker? Tap it to discover tonight\'s shows! Each pin is a venue with live music waiting for you.',
+      buttonText: 'Got it!',
       showSkip: true,
     },
     {
       target: ONBOARDING_TARGETS.footerSearch,
-      title: 'Search Artists & Venues',
-      description: 'Find your favorite artists, bands, and venues. Discover new music in your area.',
+      title: 'Search Anything',
+      description: 'Looking for someone specific? Search artists, bands, or venues by name here.',
       buttonText: 'Next',
       showSkip: true,
+    },
+    {
+      target: ONBOARDING_TARGETS.footerCreate,
+      title: 'Make It Happen',
+      description: 'Ready to perform? Tap here to book a show, start a band, or register as an artist.',
+      buttonText: 'Awesome!',
+      showSkip: false,
     },
   ],
   create: [
     {
       target: ONBOARDING_TARGETS.footerCreate,
-      title: 'Create & Promote',
-      description: 'Promote a show, form a band, or register as an artist. This is where the magic happens!',
-      buttonText: 'Got it!',
+      title: 'Your Stage Awaits',
+      description: 'This is mission control. Book shows, manage your band, or set up your artist profile.',
+      buttonText: 'Let\'s Go!',
       showSkip: false,
     },
   ],
   player: [
     {
       target: ONBOARDING_TARGETS.footerPlayer,
-      title: 'Your Music Player',
-      description: 'Listen to music from local artists. Build playlists and support musicians directly.',
-      buttonText: 'Got it!',
+      title: 'Your Music',
+      description: 'All the songs you discover live here. Create playlists and buy tracks to support artists directly.',
+      buttonText: 'Nice!',
       showSkip: false,
     },
   ],
@@ -104,8 +111,8 @@ const TUTORIAL_CONTENT: Record<TutorialStep, SpotlightStep[]> = {
     {
       target: ONBOARDING_TARGETS.footerProfile,
       title: 'Your Profile',
-      description: 'View and edit your profile, see your tickets, and manage your account settings.',
-      buttonText: 'Got it!',
+      description: 'Manage your account, view tickets, and see your activity. Make it yours!',
+      buttonText: 'Done!',
       showSkip: false,
     },
   ],

@@ -7,6 +7,8 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { AppErrorBoundary } from './components/AppErrorBoundary';
 import WelcomeScreen from "./screens/WelcomeScreen";
+import InitialOnboarding from "./components/InitialOnboarding";
+import UserTypeSelection from "./components/UserTypeSelection";
 import LogIn from "./app/login";
 import Signup from "./app/signup";
 import Success from "./app/success";
@@ -40,7 +42,9 @@ try {
 }
 
 export type RootStackParamList = {
+  InitialOnboarding: undefined;
   Welcome: undefined;
+  UserTypeSelection: undefined;
   Login: undefined;
   Signup: undefined;
   Success: undefined;
@@ -101,10 +105,12 @@ export default function App() {
             <OnboardingProvider>
               <NavigationContainer>
                 <Stack.Navigator
-                  initialRouteName="Welcome"
+                  initialRouteName="InitialOnboarding"
                   screenOptions={{ headerShown: false }}
                 >
+                  <Stack.Screen name="InitialOnboarding" component={InitialOnboarding} />
                   <Stack.Screen name="Welcome" component={WelcomeScreen} />
+                  <Stack.Screen name="UserTypeSelection" component={UserTypeSelection} />
                   <Stack.Screen name="Login" component={LogIn} />
                   <Stack.Screen name="Signup" component={Signup} />
                   <Stack.Screen name="Success" component={Success} />
